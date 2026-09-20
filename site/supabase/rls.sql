@@ -1,0 +1,3 @@
+-- No application tables currently exist, so there are no RLS policies to apply.
+-- Keep Row Level Security enabled for every future table and write policies
+-- that follow the least-privilege rule before connecting it to the frontend.
