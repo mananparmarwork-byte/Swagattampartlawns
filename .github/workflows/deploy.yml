@@ -1,0 +1,104 @@
+name: Deploy combined Swagattam site (site + /111 + /999)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # ---- Build the marketing / landing site (owns "/") ----
+      - name: Install site dependencies
+        working-directory: site
+        run: npm install --no-audit --no-fund
+
+      - name: Build site
+        working-directory: site
+        run: npm run build
+        env:
+          VITE_BASE_PATH: /
+          VITE_ESTIMATOR_URL: /111
+          VITE_ADMIN_URL: /999
+
+      # ---- Build the estimator app (serves "/111" and "/999") ----
+      - name: Install app dependencies
+        working-directory: app
+        run: npm install --no-audit --no-fund
+
+      - name: Build app
+        working-directory: app
+        run: npm run build
+        env:
+          VITE_BASE_PATH: /
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+
+      # ---- Merge both builds into one static site ----
+      - name: Merge builds
+        run: |
+          set -e
+          mkdir -p combined
+
+          # Landing site owns the root ("/", 404.html, media, CNAME, etc.)
+          cp -r site/dist/. combined/
+
+          # Merge the estimator app's hashed assets into the shared /assets/ folder.
+          # Safe: Vite content-hashes filenames, so the two builds' files never collide.
+          mkdir -p combined/assets
+          cp -r app/dist/assets/. combined/assets/
+
+          # Serve the estimator app as physical directories at /111 and /999.
+          # Its bundle reads window.location.pathname directly, so the same
+          # index.html works correctly from either path.
+          mkdir -p combined/111 combined/999
+          cp app/dist/index.html combined/111/index.html
+          cp app/dist/index.html combined/999/index.html
+
+          # Bring over the estimator's own public assets (e.g. its logo) if not
+          # already present from the landing site.
+          for f in app/public/*; do
+            name=$(basename "$f")
+            [ -e "combined/$name" ] || cp "$f" "combined/$name"
+          done
+
+      - name: Configure custom domain
+        if: ${{ vars.CUSTOM_DOMAIN != '' }}
+        run: printf '%s\n' '${{ vars.CUSTOM_DOMAIN }}' > combined/CNAME
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: combined
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
