@@ -29,18 +29,34 @@ jobs:
         with:
           node-version: 22
 
+      # If a custom domain is set (vars.CUSTOM_DOMAIN), the site is served at
+      # that domain's root, so BASE_PATH is "/". Otherwise GitHub serves this
+      # as a project site at https://<user>.github.io/<repo>/, so every asset
+      # and route must be prefixed with "/<repo>/" or the page loads blank.
+      - name: Determine base path
+        id: basepath
+        run: |
+          if [ -n "${{ vars.CUSTOM_DOMAIN }}" ]; then
+            echo "base=/" >> "$GITHUB_OUTPUT"
+          else
+            echo "base=/${{ github.event.repository.name }}/" >> "$GITHUB_OUTPUT"
+          fi
+
       # ---- Build the marketing / landing site (owns "/") ----
       - name: Install site dependencies
         working-directory: site
         run: npm install --no-audit --no-fund
 
+      - name: Remove baked-in CNAME placeholder
+        run: rm -f site/public/CNAME
+
       - name: Build site
         working-directory: site
         run: npm run build
         env:
-          VITE_BASE_PATH: /
-          VITE_ESTIMATOR_URL: /111
-          VITE_ADMIN_URL: /999
+          VITE_BASE_PATH: ${{ steps.basepath.outputs.base }}
+          VITE_ESTIMATOR_URL: ${{ steps.basepath.outputs.base }}111
+          VITE_ADMIN_URL: ${{ steps.basepath.outputs.base }}999
 
       # ---- Build the estimator app (serves "/111" and "/999") ----
       - name: Install app dependencies
@@ -51,7 +67,7 @@ jobs:
         working-directory: app
         run: npm run build
         env:
-          VITE_BASE_PATH: /
+          VITE_BASE_PATH: ${{ steps.basepath.outputs.base }}
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
 
