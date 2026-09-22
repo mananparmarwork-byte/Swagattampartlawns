@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -15,6 +15,7 @@ import {
   Menu,
   MessageCircle,
   Phone,
+  Play,
   X,
 } from 'lucide-react';
 import { siteConfig } from './siteConfig';
@@ -23,6 +24,12 @@ const queryClient = new QueryClient();
 const media = (folder: string, file: string) =>
   `${import.meta.env.BASE_URL}media/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`;
 const normalizedPathname = (pathname: string) => pathname.replace(/\/+$/, '') || '/';
+const formatEventDate = (isoDate: string) => {
+  if (!isoDate) return '';
+  const [year, month, day] = isoDate.split('-');
+  if (!year || !month || !day) return isoDate;
+  return `${day}/${month}/${year}`;
+};
 
 type GalleryImage = { src: string; alt: string; category: string };
 type Enquiry = {
@@ -45,6 +52,52 @@ const propertyImages: GalleryImage[] = [
   alt,
   category,
 }));
+
+type VideoItem = {
+  src: string;
+  poster: string;
+  title: string;
+  note: string;
+  duration: string;
+};
+
+const videoItems: VideoItem[] = [
+  {
+    src: media('Videos', 'wedding-carnival-reel.mp4'),
+    poster: media('Videos', 'wedding-carnival-reel.jpg'),
+    title: 'Wedding Carnival Reel',
+    note: 'A day to remember',
+    duration: '0:31',
+  },
+  {
+    src: media('Videos', 'decor-walkway.mp4'),
+    poster: media('Videos', 'decor-walkway.jpg'),
+    title: 'The Grand Entrance',
+    note: 'Decor & lighting',
+    duration: '0:53',
+  },
+  {
+    src: media('Videos', 'aerial-night-view.mp4'),
+    poster: media('Videos', 'aerial-night-view.jpg'),
+    title: 'Swagattam From Above',
+    note: 'An aerial view by night',
+    duration: '1:08',
+  },
+  {
+    src: media('Videos', 'venue-night-walkthrough.mp4'),
+    poster: media('Videos', 'venue-night-walkthrough.jpg'),
+    title: 'An Evening At Swagattam',
+    note: 'Lawns, lights & more',
+    duration: '0:51',
+  },
+  {
+    src: media('Videos', 'mandap-decor.mp4'),
+    poster: media('Videos', 'mandap-decor.jpg'),
+    title: 'Mandap Décor',
+    note: 'Details that matter',
+    duration: '0:58',
+  },
+];
 
 const galleryImages: GalleryImage[] = [
   ['20211210_102631.webp', 'Mandap ceremony detail', 'Wedding'],
@@ -111,6 +164,7 @@ const eventGalleries: Record<string, GalleryImage[]> = {
     'WhatsApp Image 2024-02-28 at 12.17.56 PM.webp',
     'WhatsApp Image 2024-02-28 at 12.17.58 PM.webp',
     'WhatsApp Image 2026-09-18 at 5.35.16 PM (1).webp',
+    '10.webp',
   ]),
   Engagement: categoryGallery('engangement', 'Engagement', [
     '20201227_154619.webp',
@@ -228,6 +282,7 @@ const eventCards = [
 const navItems = [
   ['About', '#about'],
   ['Events', '#events'],
+  ['Videos', '#videos'],
   ['Venue', '#venue'],
   ['Instagram', '#instagram'],
   ['Contact', '#contact'],
@@ -658,20 +713,131 @@ function Events({ onCategory }: { onCategory: (category: string) => void }) {
   );
 }
 
+function Videos({ onPlay }: { onPlay: (video: VideoItem) => void }) {
+  return (
+    <section className="videos-section" id="videos">
+      <div className="section-wrap">
+        <SectionIntro
+          eyebrow="Moments in motion"
+          title={
+            <>
+              Watch the
+              <br />
+              <em>celebrations come alive.</em>
+            </>
+          }
+          copy="A few reels from real Swagattam celebrations. Tap any video to play it with sound."
+        />
+        <div className="video-grid">
+          {videoItems.map((video) => (
+            <button
+              type="button"
+              className="video-card reveal"
+              key={video.src}
+              onClick={() => onPlay(video)}
+              aria-label={`Play video: ${video.title}`}
+              data-testid={`button-video-${video.title.toLowerCase().replace(/\s+/g, '-')}`}
+            >
+              <img src={video.poster} alt={video.title} loading="lazy" decoding="async" width="960" height="720" />
+              <span className="video-play-icon" aria-hidden="true">
+                <Play size={22} fill="currentColor" />
+              </span>
+              <span className="video-duration">{video.duration}</span>
+              <span className="video-info">
+                <small>{video.note}</small>
+                <h3>{video.title}</h3>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VideoLightbox({ video, onClose }: { video: VideoItem | null; onClose: () => void }) {
+  const isOpen = video !== null;
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = '';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    // Explicitly (re)request playback with sound once the element mounts.
+    // Autoplay is triggered by the user's click on the card, so browsers
+    // allow unmuted playback here; if a browser still blocks it, the
+    // native controls let the person press play themselves.
+    const el = videoRef.current;
+    if (el) {
+      el.muted = false;
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          /* autoplay blocked — controls remain available for manual play */
+        });
+      }
+    }
+  }, [isOpen, video?.src]);
+
+  if (!video) return null;
+
+  return (
+    <div
+      className="video-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label={video.title}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      data-testid="video-lightbox"
+    >
+      <div className="video-lightbox-panel">
+        <button className="video-lightbox-close" type="button" onClick={onClose} aria-label="Close video" data-testid="button-video-close">
+          <X size={20} />
+        </button>
+        <video
+          key={video.src}
+          ref={videoRef}
+          src={video.src}
+          poster={video.poster}
+          controls
+          autoPlay
+          playsInline
+          preload="none"
+          className="video-lightbox-player"
+        />
+        <p className="video-lightbox-title">{video.title}</p>
+      </div>
+    </div>
+  );
+}
+
 function Property() {
   return (
     <section className="property-section" id="venue">
       <div className="section-wrap">
         <SectionIntro
-          eyebrow="Our property"
+          eyebrow="What makes Swagattam special"
           title={
             <>
-              A venue that
+              More than a venue.
               <br />
-              <em>photographs beautifully.</em>
+              <em>A setting made for memorable celebrations.</em>
             </>
           }
-          copy="Walk through the spaces, textures and light that make Swagattam feel like more than a venue."
+          copy="From our spacious party lawns to the beautiful fountain lake within the property, Swagattam offers a setting that feels different from an ordinary event venue. Open surroundings, greenery, the calming presence of water, and thoughtfully designed spaces come together to create a beautiful atmosphere for weddings, celebrations and special occasions. A place where every celebration has its own backdrop."
         />
          <div className="property-grid">
            {propertyImages.map((image, index) => (
@@ -1096,8 +1262,9 @@ function Home() {
   const [enquiryOpen, setEnquiryOpen] = useState(false);
   const [callInfoOpen, setCallInfoOpen] = useState(false);
   const [galleryCategory, setGalleryCategory] = useState<string | null>(null);
+  const [activeVideo, setActiveVideo] = useState<VideoItem | null>(null);
   const handleSubmit = (enquiry: Enquiry) => {
-    const message = `Hello, I am interested in ${siteConfig.businessName}.\n\nName: ${enquiry.name}\nMobile: ${enquiry.mobile}\nEmail: ${enquiry.email || 'Not provided'}\nEvent type: ${enquiry.eventType}\nEvent date: ${enquiry.date || 'Not decided'}\nGuests: ${enquiry.guests || 'Not decided'}\nPreferred venue/area: ${enquiry.area || 'Not specified'}\nMessage: ${enquiry.message || 'No additional message'}`;
+    const message = `Hello, I am interested in ${siteConfig.businessName}.\n\nName: ${enquiry.name}\nMobile: ${enquiry.mobile}\nEmail: ${enquiry.email || 'Not provided'}\nEvent type: ${enquiry.eventType}\nEvent date: ${enquiry.date ? formatEventDate(enquiry.date) : 'Not decided'}\nGuests: ${enquiry.guests || 'Not decided'}\nPreferred venue/area: ${enquiry.area || 'Not specified'}\nMessage: ${enquiry.message || 'No additional message'}`;
     window.open(whatsappUrl(message), '_blank', 'noopener,noreferrer');
     setEnquiryOpen(false);
   };
@@ -1130,6 +1297,7 @@ function Home() {
         <About />
         <WhyChoose />
         <Events onCategory={setGalleryCategory} />
+        <Videos onPlay={setActiveVideo} />
         <Property />
         <InstagramSection />
         <Facilities />
@@ -1152,6 +1320,7 @@ function Home() {
         images={galleryCategory ? eventGalleries[galleryCategory] ?? [] : []}
         onClose={() => setGalleryCategory(null)}
       />
+      <VideoLightbox video={activeVideo} onClose={() => setActiveVideo(null)} />
     </div>
   );
 }
