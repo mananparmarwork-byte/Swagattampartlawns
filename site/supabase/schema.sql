@@ -1,0 +1,6 @@
+-- Swagattam Party Lawns currently has no server-persisted application data.
+-- The enquiry form opens a pre-filled WhatsApp message and does not submit
+-- records to a database, so no application tables are required for this export.
+--
+-- If enquiry storage is added later, create the table and its policies in a
+-- reviewed migration rather than adding an unused table here.
