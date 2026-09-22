@@ -694,11 +694,14 @@
 }
 
 @media print {
-  @page { size: A4; margin: 8mm 10mm; }
+  @page { size: A4; margin: 8mm 12mm; }
   body { background: white !important; color: #242424 !important; }
   .estimator-app, .admin-shell { display: none !important; }
   .print-sheet {
     display: block !important;
+    box-sizing: border-box;
+    width: 100%;
+    padding-right: 3mm;
     font-family: 'DM Sans', sans-serif;
     color: #172820;
     font-size: 9px;
@@ -715,7 +718,7 @@
   .print-inquiry-grid strong { display: block; margin-top: 2px; font-size: 9px; overflow-wrap: anywhere; }
   .print-service-section { margin-bottom: 8px; break-inside: avoid; }
   .print-service-section h2 { margin-bottom: 4px; font-size: 13px; }
-  .print-table { width: 100%; border-collapse: collapse; font-size: 8.5px; }
+  .print-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8.5px; }
   .print-table th { text-align: left; background: #F7F3EA; color: #242424; font-size: 7px; text-transform: uppercase; letter-spacing: .05em; }
   .print-table th, .print-table td { padding: 4px 5px; border-bottom: 1px solid #E7E0D5; vertical-align: top; }
   .print-table th:nth-child(1), .print-table td:nth-child(1) { width: 22%; }
