@@ -17,7 +17,7 @@ import type { Quote } from '@/lib/supabase-queries';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { ArrowLeft, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { Link } from 'wouter';
-import { CATALOG_STORAGE_KEY, CATALOG_UPDATED_EVENT, ORIGINAL_CATALOG, cloneCatalog, loadCatalog, saveCatalog } from '@/lib/catalog';
+import { CATALOG_UPDATED_EVENT, ORIGINAL_CATALOG, cacheCatalog, cloneCatalog, loadCatalog, saveCatalog } from '@/lib/catalog';
 import type { CatalogCategory, CatalogItem, CatalogSubcategory, PricingType } from '@/lib/catalog';
 
 type ModalState =
@@ -199,19 +199,22 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
 
   useEffect(() => {
     if (!catalogQuery.data || !Array.isArray(catalogQuery.data) || catalogQuery.data.length === 0) return;
-    try {
-      if (!window.localStorage.getItem(CATALOG_STORAGE_KEY)) setCatalog(catalogQuery.data);
-    } catch {
-      setCatalog(catalogQuery.data);
-    }
+    // The cloud (Supabase) copy is the source of truth, so every device shows the same menu.
+    // Skip while a save is in flight or has failed, so unsaved local edits are not overwritten.
+    if (updateCatalogMutation.isPending || updateCatalogMutation.isError) return;
+    setCatalog(catalogQuery.data);
+    cacheCatalog(catalogQuery.data);
   }, [catalogQuery.data]);
 
   const commit = (next: CatalogCategory[]) => {
     setCatalog(next);
     saveCatalog(next);
     setSavedAt(new Date());
-    updateCatalogMutation.mutate({ data: next });
-    void queryClient.invalidateQueries({ queryKey: getGetCatalogQueryKey() });
+    updateCatalogMutation.mutate({ data: next }, {
+      onSuccess: (saved) => {
+        queryClient.setQueryData(getGetCatalogQueryKey(), saved);
+      },
+    });
   };
   const updateCategory = (categoryId: string, updater: (category: CatalogCategory) => CatalogCategory) => commit(catalog.map((category) => category.id === categoryId ? updater(category) : category));
   const deleteCategory = (category: CatalogCategory) => { if (window.confirm(`Delete ${category.name} and all of its services?`)) commit(catalog.filter((entry) => entry.id !== category.id)); };
@@ -271,7 +274,7 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
       </div>
     </header>
     <div className="mx-auto max-w-[1440px] px-4 py-7 sm:px-8 sm:py-10 lg:px-12">
-        <div className="admin-intro flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-[#9a5b47]">Catalog management</p><div className="admin-hero-badge"><Sparkles size={12} /> Curated venue operations</div><h1 className="mt-3 max-w-2xl font-serif text-4xl font-semibold leading-tight tracking-[-0.025em] text-[#263b31] sm:text-5xl">Keep every celebration detail ready.</h1><p className="mt-4 max-w-xl text-sm leading-7 text-[#737269]">Update the services and prices your team offers. Changes sync to Supabase and appear in the estimator for future visitors.</p></div><div className="flex flex-wrap items-center gap-2"><span className="saved-pill" data-testid="status-catalog-saved"><Check size={14} /> Saved locally · {savedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{updateCatalogMutation.isError && <span className="rounded-lg border border-[#e8cfc5] bg-[#fff7f3] px-3 py-2 text-xs text-[#73483b]" role="alert">Cloud save failed; local changes remain on this device.</span>}<button type="button" onClick={() => setModal({ kind: 'restore' })} className="admin-secondary" data-testid="button-open-restore"><RotateCcw size={15} /> Restore original</button><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-category"><Plus size={16} /> Add category</button></div></div>
+        <div className="admin-intro flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-[#9a5b47]">Catalog management</p><div className="admin-hero-badge"><Sparkles size={12} /> Curated venue operations</div><h1 className="mt-3 max-w-2xl font-serif text-4xl font-semibold leading-tight tracking-[-0.025em] text-[#263b31] sm:text-5xl">Keep every celebration detail ready.</h1><p className="mt-4 max-w-xl text-sm leading-7 text-[#737269]">Update the services and prices your team offers. Changes sync to Supabase and appear in the estimator for future visitors.</p></div><div className="flex flex-wrap items-center gap-2"><span className="saved-pill" data-testid="status-catalog-saved"><Check size={14} /> {updateCatalogMutation.isPending ? 'Saving…' : updateCatalogMutation.isSuccess ? 'Saved to cloud' : 'Saved locally'} · {savedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{updateCatalogMutation.isError && <span className="rounded-lg border border-[#e8cfc5] bg-[#fff7f3] px-3 py-2 text-xs text-[#73483b]" role="alert">Cloud save failed, so other devices will not see this change. Please sign out, sign in again and retry.</span>}<button type="button" onClick={() => setModal({ kind: 'restore' })} className="admin-secondary" data-testid="button-open-restore"><RotateCcw size={15} /> Restore original</button><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-category"><Plus size={16} /> Add category</button></div></div>
        <div className="mt-8 grid gap-3 sm:grid-cols-4"><div className="stat-card"><LayoutGrid size={18} /><span>Categories</span><strong data-testid="text-category-count">{stats.categories}</strong></div><div className="stat-card"><Boxes size={18} /><span>Subcategories</span><strong data-testid="text-subcategory-count">{stats.subcategories}</strong></div><div className="stat-card"><ListChecks size={18} /><span>Services</span><strong data-testid="text-service-count">{stats.services}</strong></div><div className="stat-card"><Check size={18} /><span>Customer-ready</span><strong data-testid="text-active-service-count">{stats.active}</strong></div></div>
         <section className="admin-panel mt-8 rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] p-4 shadow-[0_14px_40px_rgba(98,67,36,.035)] sm:p-5" data-testid="section-recent-estimates">
          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#eee6d9] pb-4">

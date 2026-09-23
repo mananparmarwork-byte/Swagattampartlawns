@@ -28,7 +28,7 @@ import {
 import { ErrorBoundary } from '@/components/error-boundary';
 import NotFound from '@/pages/not-found';
 import type { EstimatePayload } from '@/lib/estimate-connection';
-import { CATALOG_STORAGE_KEY, CATALOG_UPDATED_EVENT, loadCatalog } from '@/lib/catalog';
+import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
 
@@ -655,13 +655,9 @@ function EstimatorPage() {
 
   useEffect(() => {
     if (!catalogQuery.data || !Array.isArray(catalogQuery.data) || catalogQuery.data.length === 0) return;
-    try {
-      if (!window.localStorage.getItem(CATALOG_STORAGE_KEY)) {
-        setCatalog(catalogQuery.data);
-      }
-    } catch {
-      setCatalog(catalogQuery.data);
-    }
+    // Cloud copy is the source of truth; local storage is only an offline fallback.
+    setCatalog(catalogQuery.data);
+    cacheCatalog(catalogQuery.data);
   }, [catalogQuery.data]);
 
   useEffect(() => {

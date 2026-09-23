@@ -112,6 +112,15 @@ export function saveCatalog(catalog: CatalogCategory[]) {
   }
 }
 
+// Stores the cloud copy on this device as an offline fallback (no UI refresh event).
+export function cacheCatalog(catalog: CatalogCategory[]) {
+  try {
+    window.localStorage.setItem(CATALOG_STORAGE_KEY, JSON.stringify(catalog));
+  } catch {
+    // Ignore: the cloud copy is still used in memory.
+  }
+}
+
 export const catalogStats = (catalog: CatalogCategory[]) => ({
   categories: catalog.length,
   subcategories: catalog.reduce((sum, category) => sum + category.subcategories.length, 0),
