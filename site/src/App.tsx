@@ -523,14 +523,13 @@ function About() {
       <div className="section-wrap">
         <div className="intro-grid">
           <div className="intro-title reveal">
-            <span className="eyebrow">About Swagattam</span>
-            <h2 className="font-display">A setting for your once-in-a-lifetime.</h2>
+            <h2 className="font-display">A Natural Escape for Every Celebration</h2>
           </div>
           <div className="intro-copy reveal">
             <p>
-              Swagattam Party Lawns is a beautiful celebration venue designed for memorable gatherings, weddings and special occasions. From the first arrival to the final photograph, let the setting hold space for your story.
+              Swagattam Party Lawns is surrounded by a beautiful blend of nature, water, and open spaces, creating a calm and refreshing atmosphere for every celebration. At the heart of the venue is a charming fountain lake with a picturesque bridge, complemented by a spacious banquet, lush gardens, and an abundance of trees.
             </p>
-            <p>Come discover a spacious setting shaped for celebrations of every scale, from intimate gatherings to unforgettable wedding days.</p>
+            <p>The natural surroundings, open lawns, and peaceful setting create an experience that feels elegant yet connected to nature — a place where celebrations, photographs, and unforgettable moments come together.</p>
           </div>
         </div>
         <div className="venue-overview">
@@ -546,7 +545,7 @@ function About() {
             <span className="venue-image-caption">A grand space for every celebration</span>
           </div>
           <div className="venue-information reveal">
-            <span className="eyebrow">Our property</span>
+            <span className="eyebrow">About Swagattam</span>
             <h3 className="font-display">A Grand Space for Every Celebration</h3>
             <p className="venue-copy">
               Swagattam Party Lawns offers a spacious 70,000 sq. ft. lawn area along with a 5,500 sq. ft. banquet hall, four connected rooms, and the flexibility to host gatherings from 100 to 1,500 guests.
