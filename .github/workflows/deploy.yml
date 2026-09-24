@@ -29,26 +29,17 @@ jobs:
         with:
           node-version: 22
 
-      # If a custom domain is set (vars.CUSTOM_DOMAIN), the site is served at
-      # that domain's root, so BASE_PATH is "/". Otherwise GitHub serves this
-      # as a project site at https://<user>.github.io/<repo>/, so every asset
-      # and route must be prefixed with "/<repo>/" or the page loads blank.
-      - name: Determine base path
+      # This repository is deployed to the custom domain at the domain root.
+      # Keep Vite assets at / so the production domain never requests
+      # /Swagattampartlawns/assets/... (which causes the blank-page 404s).
+      - name: Set production base path
         id: basepath
-        run: |
-          if [ -n "${{ vars.CUSTOM_DOMAIN }}" ]; then
-            echo "base=/" >> "$GITHUB_OUTPUT"
-          else
-            echo "base=/${{ github.event.repository.name }}/" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "base=/" >> "$GITHUB_OUTPUT"
 
       # ---- Build the marketing / landing site (owns "/") ----
       - name: Install site dependencies
         working-directory: site
         run: npm install --no-audit --no-fund
-
-      - name: Remove baked-in CNAME placeholder
-        run: rm -f site/public/CNAME
 
       - name: Build site
         working-directory: site
@@ -100,8 +91,7 @@ jobs:
           done
 
       - name: Configure custom domain
-        if: ${{ vars.CUSTOM_DOMAIN != '' }}
-        run: printf '%s\n' '${{ vars.CUSTOM_DOMAIN }}' > combined/CNAME
+        run: printf '%s\n' 'swagattampartylawns.in' > combined/CNAME
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
