@@ -6,6 +6,7 @@ import {
   getListQuotesQueryKey,
   useCreateQuote,
   useGetCatalog,
+  useBookedSlots,
   parseEventDates,
   formatEventDates,
   quoteEventDates,
@@ -34,7 +35,7 @@ import type { EstimatePayload } from '@/lib/estimate-connection';
 import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
-import { ALL_SLOT_IDS, SLOTS, hasAnySlots, scheduleLines, slotText, sortSlots, type EventSlots } from '@/lib/booking';
+import { ALL_SLOT_IDS, SLOTS, hasAnySlots, scheduleLines, slotText, sortSlots, type EventSlots, type SlotId } from '@/lib/booking';
 
 const EVENT_TYPES = ['Wedding', 'Reception', 'Engagement', 'Birthday', 'Anniversary', 'Corporate', 'Other'];
 const BANQUET_NAME = 'Swagattam Party Lawns';
@@ -243,6 +244,7 @@ function EventDetails({
   gstNumberVisible,
   customerGstNumberVisible,
   eventSlots,
+  bookedSlots,
   onEventSlotsChange,
   onChange,
   onHallGstNumberChange,
@@ -257,6 +259,7 @@ function EventDetails({
   gstNumberVisible: boolean;
   customerGstNumberVisible: boolean;
   eventSlots: EventSlots;
+  bookedSlots: Record<string, SlotId[]>;
   onEventSlotsChange: (slots: EventSlots) => void;
   onChange: (field: keyof Details, value: string) => void;
   onHallGstNumberChange: (value: string) => void;
@@ -300,7 +303,7 @@ function EventDetails({
             />
           </Field>
         )}
-        <MultiDatePicker value={details.eventDate} error={errors.eventDate} slots={eventSlots} onChange={(value) => onChange('eventDate', value)} onSlotsChange={onEventSlotsChange} />
+        <MultiDatePicker value={details.eventDate} error={errors.eventDate} slots={eventSlots} booked={bookedSlots} onChange={(value) => onChange('eventDate', value)} onSlotsChange={onEventSlotsChange} />
         <Field label="Number of guests" required error={errors.guests} hint="Food items are priced per guest">
           <div className="relative">
             <UsersRound size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9a5b47]" />
@@ -454,7 +457,7 @@ function DiscountBlock({
   );
 }
 
-function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { value: string; error?: string; slots: EventSlots; onChange: (value: string) => void; onSlotsChange: (slots: EventSlots) => void }) {
+function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange }: { value: string; error?: string; slots: EventSlots; booked: Record<string, SlotId[]>; onChange: (value: string) => void; onSlotsChange: (slots: EventSlots) => void }) {
   const dates = parseEventDates(value);
   const todayISO = localISODate(new Date());
   const [open, setOpen] = useState(false);
@@ -477,7 +480,8 @@ function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { val
     onSlotsChange(kept);
   };
   const toggleDate = (iso: string) => updateDates(dates.includes(iso) ? dates.filter((date) => date !== iso) : [...dates, iso]);
-  const toggleSlot = (date: string, id: (typeof ALL_SLOT_IDS)[number]) => {
+  const toggleSlot = (date: string, id: SlotId) => {
+    if ((booked[date] ?? []).includes(id)) return;
     const current = slots[date] ?? [];
     onSlotsChange({ ...slots, [date]: sortSlots(current.includes(id) ? current.filter((slot) => slot !== id) : [...current, id]) });
   };
@@ -487,7 +491,7 @@ function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { val
   const copyFirstToAll = () => {
     const first = slots[dates[0]] ?? [];
     const next: EventSlots = {};
-    dates.forEach((date) => { next[date] = [...first]; });
+    dates.forEach((date) => { next[date] = first.filter((slot) => !(booked[date] ?? []).includes(slot)); });
     onSlotsChange(next);
   };
   return (
@@ -521,21 +525,27 @@ function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { val
               if (!iso) return <span key={`blank-${index}`} />;
               const selected = dates.includes(iso);
               const past = iso < todayISO;
+              const takenSlots = booked[iso] ?? [];
+              const full = takenSlots.length >= ALL_SLOT_IDS.length;
+              const partial = takenSlots.length > 0 && !full;
               return (
                 <button
                   key={iso}
                   type="button"
-                  disabled={past}
+                  disabled={past || (full && !selected)}
+                  title={full ? 'Fully booked' : partial ? `Already booked: ${slotText(takenSlots, false)}` : undefined}
                   onClick={() => toggleDate(iso)}
                   aria-pressed={selected}
-                  className={`h-9 rounded-lg text-sm font-semibold transition ${selected ? 'bg-[#864936] text-white' : past ? 'cursor-not-allowed text-[#c9c5bb]' : 'text-[#263b31] hover:bg-[#f6efe4]'} ${iso === todayISO && !selected ? 'ring-1 ring-[#b89555]' : ''}`}
+                  className={`relative h-9 rounded-lg text-sm font-semibold transition ${selected ? 'bg-[#864936] text-white' : past ? 'cursor-not-allowed text-[#c9c5bb]' : full ? 'cursor-not-allowed bg-[#f6dcd6] text-[#b0675a] line-through' : 'text-[#263b31] hover:bg-[#f6efe4]'} ${iso === todayISO && !selected ? 'ring-1 ring-[#b89555]' : ''}`}
                   data-testid={`button-date-${iso}`}
                 >
                   {Number(iso.slice(8))}
+                  {partial && <span className="absolute bottom-1 left-1/2 size-1 -translate-x-1/2 rounded-full bg-[#b9822a]" />}
                 </button>
               );
             })}
           </div>
+          <p className="mt-2 text-[11px] text-[#8b887f]" data-testid="text-availability-legend">Red = fully booked · dot = some time slots already booked</p>
           <div className="mt-3 flex items-center justify-between text-xs font-semibold">
             <button type="button" onClick={() => updateDates([])} className="text-[#864936] hover:underline" data-testid="button-clear-dates">Clear all</button>
             <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-[#864936] px-4 py-1.5 text-white" data-testid="button-done-dates">Done</button>
@@ -546,7 +556,9 @@ function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { val
         <div className="mt-3 space-y-3" data-testid="selected-dates">
           {dates.map((date) => {
             const chosen = slots[date] ?? [];
+            const taken = booked[date] ?? [];
             const entire = chosen.length === ALL_SLOT_IDS.length;
+            const clash = chosen.filter((slot) => taken.includes(slot));
             return (
               <div key={date} className="rounded-xl border border-[#e0d3c1] bg-[#fbf7ef] p-3" data-testid={`date-card-${date}`}>
                 <div className="flex items-center justify-between gap-2">
@@ -555,21 +567,24 @@ function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { val
                 </div>
                 <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#8b887f]">Time slot</p>
                 <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                  <button type="button" onClick={() => toggleEntireDay(date)} aria-pressed={entire} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${entire ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-entire`}>
+                  <button type="button" disabled={taken.length > 0} onClick={() => toggleEntireDay(date)} aria-pressed={entire} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${taken.length > 0 ? 'cursor-not-allowed border-[#eadfd2] bg-[#f1ece4] text-[#aaa397]' : entire ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-entire`}>
                     Entire day
-                    <span className="mt-0.5 block text-[10px] font-medium opacity-80">All 4 slots</span>
+                    <span className="mt-0.5 block text-[10px] font-medium opacity-80">{taken.length > 0 ? 'Not available' : 'All 4 slots'}</span>
                   </button>
                   {SLOTS.map((slot) => {
                     const on = chosen.includes(slot.id);
+                    const occupied = taken.includes(slot.id);
                     return (
-                      <button key={slot.id} type="button" onClick={() => toggleSlot(date, slot.id)} aria-pressed={on} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${on ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-${slot.id}`}>
-                        {slot.label}
-                        <span className="mt-0.5 block text-[10px] font-medium opacity-80">{slot.start} – {slot.end}</span>
+                      <button key={slot.id} type="button" disabled={occupied} onClick={() => toggleSlot(date, slot.id)} aria-pressed={on} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${occupied ? 'cursor-not-allowed border-[#e8c3bb] bg-[#f6dcd6] text-[#b0675a]' : on ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-${slot.id}`} data-occupied={occupied ? 'true' : 'false'}>
+                        <span className={occupied ? 'line-through' : ''}>{slot.label}</span>
+                        <span className="mt-0.5 block text-[10px] font-medium opacity-80">{occupied ? 'Occupied' : `${slot.start} – ${slot.end}`}</span>
                       </button>
                     );
                   })}
                 </div>
                 <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>{chosen.length ? slotText(chosen) : 'Pick one or more slots, e.g. Morning + Afternoon.'}</p>
+                {taken.length > 0 && <p className="mt-1 text-xs font-semibold text-[#b0675a]" data-testid={`text-occupied-${date}`}>Already booked on this date: {slotText(taken, false)}</p>}
+                {clash.length > 0 && <p className="mt-1 text-xs font-bold text-[#a13d32]">{slotText(clash, false)} is no longer free. Please change the time.</p>}
               </div>
             );
           })}
@@ -904,6 +919,8 @@ function EstimatorPage() {
   const [gstNumberVisible, setGstNumberVisible] = useState(true);
   const [customerGstNumberVisible, setCustomerGstNumberVisible] = useState(true);
   const [eventSlots, setEventSlots] = useState<EventSlots>({});
+  const bookedSlotsQuery = useBookedSlots();
+  const bookedSlots = bookedSlotsQuery.data ?? {};
   const [showCostPerGuest, setShowCostPerGuest] = useState(true);
   const [discountEnabled, setDiscountEnabled] = useState(false);
   const [discountPercent, setDiscountPercent] = useState('');
@@ -1044,6 +1061,10 @@ function EstimatorPage() {
     else {
       const missingSlot = chosenDates.find((date) => !eventSlotsForDates[date]?.length);
       if (missingSlot) nextErrors.eventDate = `Choose a time slot for ${formatEventDates([missingSlot])}.`;
+      else {
+        const clashDate = chosenDates.find((date) => eventSlotsForDates[date].some((slot) => (bookedSlots[date] ?? []).includes(slot)));
+        if (clashDate) nextErrors.eventDate = `${formatEventDates([clashDate])} is already booked for ${slotText(eventSlotsForDates[clashDate].filter((slot) => (bookedSlots[clashDate] ?? []).includes(slot)), false)}. Please choose another time.`;
+      }
     }
     if (!Number.isInteger(guestCount) || guestCount <= 0) nextErrors.guests = 'Guests must be more than zero.';
     if (!details.billNumber.trim()) nextErrors.billNumber = 'Enter a bill number.';
@@ -1247,7 +1268,7 @@ function EstimatorPage() {
 
           <div className="mt-8 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_390px] xl:gap-10">
             <div className="space-y-6">
-              <EventDetails eventSlots={eventSlots} onEventSlotsChange={setEventSlots} details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
+              <EventDetails eventSlots={eventSlots} bookedSlots={bookedSlots} onEventSlotsChange={setEventSlots} details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
               <DiscountBlock enabled={discountEnabled} percent={discountPercent} flat={discountFlat} discountAmount={discountAmount} onEnabledChange={setDiscountEnabled} onPercentChange={setDiscountPercent} onFlatChange={setDiscountFlat} />
                <section className="page-enter stagger-1">
                 <div className="mb-5 flex items-end justify-between gap-4 px-1">

@@ -1,4 +1,4 @@
-import type { EventSlots } from '@/lib/booking';
+import type { EventSlots, SlotId } from '@/lib/booking';
 import {
   useMutation,
   useQuery,
@@ -220,6 +220,26 @@ export function useDeleteQuote() {
       const { error } = await requireSupabase().from('quotes').delete().eq('reference', reference);
       if (error) throw error;
     },
+  });
+}
+
+// Dates and slots already booked (bills ticked "Booked"), without any customer details. Needs supabase/03-availability.sql.
+export function useBookedSlots() {
+  return useQuery<Record<string, SlotId[]>>({
+    queryKey: ['supabase', 'booked-slots'],
+    queryFn: async () => {
+      const { data, error } = await requireSupabase().rpc('booked_slots');
+      if (error) throw error;
+      const map: Record<string, SlotId[]> = {};
+      ((data ?? []) as { booked_date: string; booked_slots: SlotId[] }[]).forEach((row) => {
+        map[row.booked_date] = Array.from(new Set([...(map[row.booked_date] ?? []), ...row.booked_slots]));
+      });
+      return map;
+    },
+    enabled: isSupabaseConfigured,
+    staleTime: 20_000,
+    refetchOnWindowFocus: true,
+    retry: false,
   });
 }
 
