@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   getGetCatalogQueryKey,
   getGetQuoteQueryKey,
+  getListQuotesQueryKey,
   useGetCatalog,
   useGetQuote,
   useDeleteQuote,
@@ -12,7 +13,12 @@ import {
   signInAdmin,
   signOutAdmin,
   subscribeToAuthChanges,
+  formatEventDates,
+  quoteEventDates,
+  useSetQuoteBooked,
 } from '@/lib/supabase-queries';
+import { findConflicts, hasAnySlots, scheduleLines, slotText } from '@/lib/booking';
+import { OccupancyCalendar } from '@/components/occupancy-calendar';
 import type { Quote } from '@/lib/supabase-queries';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { ArrowLeft, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
@@ -80,11 +86,17 @@ function SavedQuotePrintSheet({ quote }: { quote: Quote | null }) {
           <div><span>Customer</span><strong>{quote.customer.name}</strong></div>
           <div><span>Mobile</span><strong>{quote.customer.mobile}</strong></div>
           <div><span>Event</span><strong>{quote.customer.eventType}</strong></div>
-          <div><span>Date</span><strong>{new Date(quote.customer.eventDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></div>
+          <div><span>Date</span><strong>{formatEventDates(quoteEventDates(quote.customer))}</strong></div>
           <div><span>Guests</span><strong>{quote.customer.guests.toLocaleString('en-IN')}</strong></div>
           <div><span>GST</span><strong>{quote.pricing.gstEnabled ? `${quote.pricing.gstRate}%` : 'Not applied'}</strong></div>
           {quote.customer.gstNumber && <div><span>Customer GST number</span><strong>{quote.customer.gstNumber}</strong></div>}
         </div>
+        {hasAnySlots(quote.customer.eventSlots) && (
+          <div className="print-schedule">
+            <span>Date &amp; time</span>
+            {scheduleLines(quoteEventDates(quote.customer), quote.customer.eventSlots).map((line) => <p key={line.date}><strong>{formatEventDates([line.date])}</strong> — {line.text}</p>)}
+          </div>
+        )}
       </section>
       {foodServices.length > 0 && <SavedQuotePrintTable title="Food & Catering" services={foodServices} guests={quote.customer.guests} showLineTotal={false} showDescription={false} />}
       {otherServices.length > 0 && <SavedQuotePrintTable title="Additional services" services={otherServices} guests={quote.customer.guests} showLineTotal />}
@@ -97,7 +109,7 @@ function SavedQuotePrintSheet({ quote }: { quote: Quote | null }) {
         {quote.pricing.discountEnabled && (quote.pricing.discountAmount ?? 0) > 0 && <div className="print-total-row"><span>Discount{(quote.pricing.discountPercent ?? 0) > 0 || (quote.pricing.discountFlat ?? 0) > 0 ? ` (${[(quote.pricing.discountPercent ?? 0) > 0 ? `${quote.pricing.discountPercent}%` : '', (quote.pricing.discountFlat ?? 0) > 0 ? money(quote.pricing.discountFlat ?? 0) : ''].filter(Boolean).join(' + ')})` : ''}</span><strong>− {money(quote.pricing.discountAmount ?? 0)}</strong></div>}
         {quote.pricing.gstEnabled && <div className="print-total-row"><span>GST ({quote.pricing.gstRate}%)</span><strong>{money(quote.pricing.gstAmount)}</strong></div>}
         <div className="print-total-row print-grand"><span>Grand total</span><strong>{money(quote.pricing.grandTotal)}</strong></div>
-        <div className="print-total-row"><span>Cost per guest</span><strong>{money(quote.pricing.costPerGuest)}</strong></div>
+        {quote.pricing.showCostPerGuest !== false && <div className="print-total-row"><span>Cost per guest</span><strong>{money(quote.pricing.costPerGuest)}</strong></div>}
       </div>
       <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
     </main>
@@ -178,6 +190,8 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const catalogQuery = useGetCatalog();
   const quotesQuery = useListQuotes({ limit: 100 });
   const deleteQuoteMutation = useDeleteQuote();
+  const setBookedMutation = useSetQuoteBooked();
+  const [bookingFilter, setBookingFilter] = useState<'all' | 'booked' | 'open'>('all');
   const updateCatalogMutation = useUpdateCatalog();
   const selectedQuoteQuery = useGetQuote(selectedQuoteReference ?? '', {
     query: {
@@ -185,6 +199,9 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
       queryKey: getGetQuoteQueryKey(selectedQuoteReference ?? ''),
     },
   });
+  const allQuotes = quotesQuery.data ?? [];
+  const bookedCount = allQuotes.filter((quote) => quote.status === 'confirmed').length;
+  const filteredQuotes = allQuotes.filter((quote) => bookingFilter === 'all' || (bookingFilter === 'booked' ? quote.status === 'confirmed' : quote.status !== 'confirmed'));
   const stats = useMemo(() => {
     const subcategories = catalog.reduce((sum, category) => sum + category.subcategories.length, 0);
     const services = catalog.reduce((sum, category) => sum + category.subcategories.reduce((inner, subcategory) => inner + subcategory.items.length, 0), 0);
@@ -227,9 +244,32 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
       onSuccess: () => {
         if (selectedQuoteReference === quote.reference) setSelectedQuoteReference(null);
         void queryClient.invalidateQueries({ queryKey: getGetQuoteQueryKey(quote.reference) });
-        void queryClient.invalidateQueries({ queryKey: ['listQuotes'] });
+        void queryClient.invalidateQueries({ queryKey: getListQuotesQueryKey() });
       },
     });
+  };
+  const openQuote = (reference: string) => {
+    setSelectedQuoteReference(reference);
+    window.setTimeout(() => document.querySelector('[data-testid="panel-quote-detail"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+  };
+  const toggleBooked = async (quote: Quote, booked: boolean) => {
+    if (booked) {
+      const alreadyBooked = (quotesQuery.data ?? [])
+        .filter((other) => other.status === 'confirmed')
+        .map((other) => ({ reference: other.reference, name: other.customer.name, dates: quoteEventDates(other.customer), slots: other.customer.eventSlots }));
+      const conflicts = findConflicts({ reference: quote.reference, dates: quoteEventDates(quote.customer), slots: quote.customer.eventSlots }, alreadyBooked);
+      if (conflicts.length) {
+        window.alert(`Cannot mark this bill as booked. The hall is already booked:\n\n${conflicts.map((item) => `• ${formatEventDates([item.date])}: ${slotText(item.slots, false)} (${item.name}, Bill ${item.reference})`).join('\n')}`);
+        return;
+      }
+    }
+    try {
+      await setBookedMutation.mutateAsync({ reference: quote.reference, booked });
+      await queryClient.invalidateQueries({ queryKey: getListQuotesQueryKey() });
+      await queryClient.invalidateQueries({ queryKey: getGetQuoteQueryKey(quote.reference) });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not update the booking.');
+    }
   };
   const printQuote = (quote: Quote) => {
     setQuoteToPrint(quote);
@@ -277,11 +317,19 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
     <div className="mx-auto max-w-[1440px] px-4 py-7 sm:px-8 sm:py-10 lg:px-12">
         <div className="admin-intro flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-[#9a5b47]">Catalog management</p><div className="admin-hero-badge"><Sparkles size={12} /> Curated venue operations</div><h1 className="mt-3 max-w-2xl font-serif text-4xl font-semibold leading-tight tracking-[-0.025em] text-[#263b31] sm:text-5xl">Keep every celebration detail ready.</h1><p className="mt-4 max-w-xl text-sm leading-7 text-[#737269]">Update the services and prices your team offers. Changes sync to Supabase and appear in the estimator for future visitors.</p></div><div className="flex flex-wrap items-center gap-2"><span className="saved-pill" data-testid="status-catalog-saved"><Check size={14} /> {updateCatalogMutation.isPending ? 'Saving…' : updateCatalogMutation.isSuccess ? 'Saved to cloud' : 'Saved locally'} · {savedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{updateCatalogMutation.isError && <span className="rounded-lg border border-[#e8cfc5] bg-[#fff7f3] px-3 py-2 text-xs text-[#73483b]" role="alert">Cloud save failed, so other devices will not see this change. Please sign out, sign in again and retry.</span>}<button type="button" onClick={() => setModal({ kind: 'restore' })} className="admin-secondary" data-testid="button-open-restore"><RotateCcw size={15} /> Restore original</button><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-category"><Plus size={16} /> Add category</button></div></div>
        <div className="mt-8 grid gap-3 sm:grid-cols-4"><div className="stat-card"><LayoutGrid size={18} /><span>Categories</span><strong data-testid="text-category-count">{stats.categories}</strong></div><div className="stat-card"><Boxes size={18} /><span>Subcategories</span><strong data-testid="text-subcategory-count">{stats.subcategories}</strong></div><div className="stat-card"><ListChecks size={18} /><span>Services</span><strong data-testid="text-service-count">{stats.services}</strong></div><div className="stat-card"><Check size={18} /><span>Customer-ready</span><strong data-testid="text-active-service-count">{stats.active}</strong></div></div>
+        <OccupancyCalendar quotes={allQuotes} onOpenQuote={openQuote} />
         <section className="admin-panel mt-8 rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] p-4 shadow-[0_14px_40px_rgba(98,67,36,.035)] sm:p-5" data-testid="section-recent-estimates">
          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#eee6d9] pb-4">
              <div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9a5b47]">Customer pipeline</p><h2 className="mt-2 font-serif text-2xl font-semibold text-[#263b31]">Saved estimates</h2><p className="mt-1 text-sm text-[#7a776e]">Saved bills remain here until you manually delete them.</p></div>
            {quotesQuery.isFetching && <span className="text-xs text-[#8b887f]" role="status" data-testid="status-quotes-loading">Refreshing estimates…</span>}
          </div>
+         {allQuotes.length > 0 && (
+           <div className="flex flex-wrap gap-2 pt-4" role="tablist" data-testid="tabs-booking-filter">
+             {([['all', 'All', allQuotes.length], ['booked', 'Booked', bookedCount], ['open', 'Not booked', allQuotes.length - bookedCount]] as const).map(([key, label, count]) => (
+               <button key={key} type="button" role="tab" aria-selected={bookingFilter === key} onClick={() => setBookingFilter(key)} className={`rounded-full border px-4 py-1.5 text-xs font-bold transition ${bookingFilter === key ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#5f655e] hover:border-[#864936]'}`} data-testid={`tab-filter-${key}`}>{label} · {count}</button>
+             ))}
+           </div>
+         )}
          {quotesQuery.isLoading ? (
            <div className="grid gap-2 pt-4 sm:grid-cols-3" role="status" data-testid="status-quotes-skeleton">{[1, 2, 3].map((item) => <div key={item} className="h-20 animate-pulse rounded-xl bg-[#f2e8d3]" />)}</div>
          ) : quotesQuery.isError ? (
@@ -290,9 +338,10 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
            <div className="empty-panel mt-4 py-10" data-testid="empty-quotes"><CircleAlert size={22} /><h2>No saved estimates yet</h2><p>When a visitor saves a brief, it will appear here for follow-up.</p></div>
          ) : (
            <div className="divide-y divide-[#eee6d9]" data-testid="list-recent-quotes">
-              {(quotesQuery.data ?? []).map((quote) => <div key={quote.id} className="flex w-full flex-col items-start gap-3 py-4 text-left transition hover:bg-[#fcf8f0] sm:flex-row sm:items-center sm:justify-between sm:px-2" data-testid={`row-saved-quote-${quote.reference}`}>
-                <button type="button" onClick={() => setSelectedQuoteReference(quote.reference)} className="min-w-0 text-left" data-testid={`button-open-quote-${quote.reference}`}><span className="flex flex-wrap items-center gap-2"><strong className="text-sm text-[#2e4437]">{quote.customer.name}</strong><span className="status-pill status-active">{quote.status}</span></span><span className="mt-1 block text-xs text-[#858178]">{quote.customer.eventType} · {quote.customer.guests.toLocaleString('en-IN')} guests · {quote.reference}</span></button>
-                <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end"><span className="text-left sm:text-right"><strong className="block font-mono text-sm text-[#864936]">{money(quote.pricing.grandTotal)}</strong><span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[#938b7f]">{new Date(quote.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></span><span className="flex gap-1"><button type="button" onClick={() => printQuote(quote)} className="icon-button" aria-label={`Print bill ${quote.reference}`} data-testid={`button-print-quote-${quote.reference}`}><Printer size={16} /></button><button type="button" onClick={() => deleteQuote(quote)} className="icon-button danger-hover" aria-label={`Delete bill ${quote.reference}`} data-testid={`button-delete-quote-${quote.reference}`} disabled={deleteQuoteMutation.isPending}><Trash2 size={16} /></button></span></span>
+              {filteredQuotes.length === 0 && <p className="py-6 text-center text-sm text-[#7a776e]" data-testid="empty-filtered-quotes">No bills in this view.</p>}
+              {filteredQuotes.map((quote) => <div key={quote.id} className="flex w-full flex-col items-start gap-3 py-4 text-left transition hover:bg-[#fcf8f0] sm:flex-row sm:items-center sm:justify-between sm:px-2" data-testid={`row-saved-quote-${quote.reference}`}>
+                <button type="button" onClick={() => setSelectedQuoteReference(quote.reference)} className="min-w-0 text-left" data-testid={`button-open-quote-${quote.reference}`}><span className="flex flex-wrap items-center gap-2"><strong className="text-sm text-[#2e4437]">{quote.customer.name}</strong><span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] ${quote.status === 'confirmed' ? 'bg-[#864936] text-white' : 'bg-[#eee6d9] text-[#7a776e]'}`} data-testid={`badge-booking-${quote.reference}`}>{quote.status === 'confirmed' ? 'Booked' : 'Not booked'}</span></span><span className="mt-1 block text-xs text-[#858178]">{quote.customer.eventType} · {quote.customer.guests.toLocaleString('en-IN')} guests · {quote.reference}</span><span className="mt-1 block text-xs font-semibold text-[#5f655e]" data-testid={`text-schedule-${quote.reference}`}>{hasAnySlots(quote.customer.eventSlots) ? scheduleLines(quoteEventDates(quote.customer), quote.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${slotText(quote.customer.eventSlots?.[line.date], false)}`).join(' · ') : `${formatEventDates(quoteEventDates(quote.customer))} · time not set`}</span></button>
+                <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end"><span className="text-left sm:text-right"><strong className="block font-mono text-sm text-[#864936]">{money(quote.pricing.grandTotal)}</strong><span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[#938b7f]">{new Date(quote.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></span><span className="flex items-center gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e0d3c1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f655e]"><input type="checkbox" checked={quote.status === 'confirmed'} disabled={setBookedMutation.isPending} onChange={(e) => void toggleBooked(quote, e.target.checked)} className="size-4 accent-[#864936]" data-testid={`input-booked-${quote.reference}`} />Booked</label><button type="button" onClick={() => printQuote(quote)} className="icon-button" aria-label={`Print bill ${quote.reference}`} data-testid={`button-print-quote-${quote.reference}`}><Printer size={16} /></button><button type="button" onClick={() => deleteQuote(quote)} className="icon-button danger-hover" aria-label={`Delete bill ${quote.reference}`} data-testid={`button-delete-quote-${quote.reference}`} disabled={deleteQuoteMutation.isPending}><Trash2 size={16} /></button></span></span>
               </div>)}
            </div>
          )}
@@ -305,11 +354,11 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
             <div className="grid gap-4 rounded-xl border border-[#e3d8c9] bg-[#fffdf8] p-3 sm:grid-cols-3 sm:p-4">
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Bill No</span><strong className="mt-1 block font-mono text-xs text-[#34483c]">{selectedQuoteQuery.data.reference}</strong></div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Saved on</span><strong className="mt-1 block text-[#34483c]">{new Date(selectedQuoteQuery.data.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</strong></div>
-              <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Status</span><strong className="mt-1 block capitalize text-[#34483c]">{selectedQuoteQuery.data.status}</strong></div>
+              <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Status</span><label className="mt-1 flex cursor-pointer items-center gap-2 font-bold text-[#34483c]"><input type="checkbox" checked={selectedQuoteQuery.data.status === 'confirmed'} disabled={setBookedMutation.isPending} onChange={(e) => selectedQuoteQuery.data && void toggleBooked(selectedQuoteQuery.data, e.target.checked)} className="size-4 accent-[#864936]" data-testid="input-booked-detail" />{selectedQuoteQuery.data.status === 'confirmed' ? 'Booked' : 'Not booked'}</label></div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Mobile</span><strong className="mt-1 block text-[#34483c]">{selectedQuoteQuery.data.customer.mobile}</strong></div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Event</span><strong className="mt-1 block text-[#34483c]">{selectedQuoteQuery.data.customer.eventType}</strong></div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Venue / hall</span><strong className="mt-1 block text-[#34483c]">{selectedQuoteQuery.data.customer.hall}</strong></div>
-              <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Event date</span><strong className="mt-1 block text-[#34483c]">{new Date(selectedQuoteQuery.data.customer.eventDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></div>
+              <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Event date &amp; time</span>{hasAnySlots(selectedQuoteQuery.data.customer.eventSlots) ? <ul className="mt-1 space-y-1 text-[#34483c]">{scheduleLines(quoteEventDates(selectedQuoteQuery.data.customer), selectedQuoteQuery.data.customer.eventSlots).map((line) => <li key={line.date}><strong>{formatEventDates([line.date])}</strong><span className="block text-xs">{line.text}</span></li>)}</ul> : <strong className="mt-1 block text-[#34483c]">{formatEventDates(quoteEventDates(selectedQuoteQuery.data.customer))} · time not set</strong>}</div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Guests</span><strong className="mt-1 block text-[#34483c]">{selectedQuoteQuery.data.customer.guests.toLocaleString('en-IN')}</strong></div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Customer GST</span><strong className="mt-1 block text-[#34483c]">{selectedQuoteQuery.data.customer.gstNumber || 'Not provided'}</strong></div>
               <div><span className="block text-[10px] uppercase tracking-[0.1em] text-[#8a867c]">Hall GST</span><strong className="mt-1 block text-[#34483c]">{selectedQuoteQuery.data.pricing.gstNumber || 'Not provided'}</strong></div>
@@ -324,7 +373,7 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
               {selectedQuoteQuery.data.pricing.discountEnabled && (selectedQuoteQuery.data.pricing.discountAmount ?? 0) > 0 && <div className="flex justify-between gap-4 text-[#5f655e]"><span>Discount</span><strong className="font-mono">− {money(selectedQuoteQuery.data.pricing.discountAmount ?? 0)}</strong></div>}
               {selectedQuoteQuery.data.pricing.gstEnabled && <div className="flex justify-between gap-4 text-[#5f655e]"><span>GST ({selectedQuoteQuery.data.pricing.gstRate}%)</span><strong className="font-mono">{money(selectedQuoteQuery.data.pricing.gstAmount)}</strong></div>}
               <div className="flex justify-between gap-4 pt-1 text-base font-semibold text-[#864936]"><span>Grand total</span><strong className="font-mono">{money(selectedQuoteQuery.data.pricing.grandTotal)}</strong></div>
-              <div className="flex justify-between gap-4 text-xs text-[#7a776e]"><span>Cost per guest</span><strong className="font-mono">{money(selectedQuoteQuery.data.pricing.costPerGuest)}</strong></div>
+              {selectedQuoteQuery.data.pricing.showCostPerGuest !== false && <div className="flex justify-between gap-4 text-xs text-[#7a776e]"><span>Cost per guest</span><strong className="font-mono">{money(selectedQuoteQuery.data.pricing.costPerGuest)}</strong></div>}
             </div>
           </div>}
         </section>}

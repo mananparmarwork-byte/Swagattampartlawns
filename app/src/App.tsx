@@ -6,6 +6,9 @@ import {
   getListQuotesQueryKey,
   useCreateQuote,
   useGetCatalog,
+  parseEventDates,
+  formatEventDates,
+  quoteEventDates,
 } from '@/lib/supabase-queries';
 import {
   ArrowRight,
@@ -31,6 +34,7 @@ import type { EstimatePayload } from '@/lib/estimate-connection';
 import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
+import { ALL_SLOT_IDS, SLOTS, hasAnySlots, scheduleLines, slotText, sortSlots, type EventSlots } from '@/lib/booking';
 
 const EVENT_TYPES = ['Wedding', 'Reception', 'Engagement', 'Birthday', 'Anniversary', 'Corporate', 'Other'];
 const BANQUET_NAME = 'Swagattam Party Lawns';
@@ -60,6 +64,8 @@ type PrintData = {
   discountLabel: string;
   grandTotal: number;
   costPerGuest: number;
+  showCostPerGuest: boolean;
+  eventSlots: EventSlots;
   billNumber: string;
 };
 type CopyStatus = 'idle' | 'copied' | 'error';
@@ -68,6 +74,8 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 const currency = (amount: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number.isFinite(amount) ? amount : 0);
 const numberFormat = (amount: number) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(amount);
+const localISODate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const displayEventDates = (value: string) => formatEventDates(parseEventDates(value));
 const displayDate = (date: string) => (date ? new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not selected');
 const displayEventType = (details: Details) => details.eventType === 'Other' ? details.otherEventType.trim() || 'Other' : details.eventType;
 const BILL_NOTE = 'This is an auto-generated bill and does not require any signature or stamp. It is electronically generated and is valid without a physical signature or company stamp.';
@@ -234,6 +242,8 @@ function EventDetails({
   customerGstNumber,
   gstNumberVisible,
   customerGstNumberVisible,
+  eventSlots,
+  onEventSlotsChange,
   onChange,
   onHallGstNumberChange,
   onCustomerGstNumberChange,
@@ -246,13 +256,14 @@ function EventDetails({
   customerGstNumber: string;
   gstNumberVisible: boolean;
   customerGstNumberVisible: boolean;
+  eventSlots: EventSlots;
+  onEventSlotsChange: (slots: EventSlots) => void;
   onChange: (field: keyof Details, value: string) => void;
   onHallGstNumberChange: (value: string) => void;
   onCustomerGstNumberChange: (value: string) => void;
   onGstNumberVisibilityChange: (visible: boolean) => void;
   onCustomerGstNumberVisibilityChange: (visible: boolean) => void;
 }) {
-  const today = new Date().toISOString().split('T')[0];
   return (
     <section className="selection-card page-enter rounded-2xl border border-[#e4dacc] p-4 sm:p-6">
       <div className="mb-5 flex items-start justify-between gap-4">
@@ -289,9 +300,7 @@ function EventDetails({
             />
           </Field>
         )}
-        <Field label="Event date" required error={errors.eventDate}>
-          <input type="date" min={today} value={details.eventDate} onChange={(e) => onChange('eventDate', e.target.value)} className="field-control h-12 w-full rounded-xl px-3 text-sm" data-testid="input-event-date" />
-        </Field>
+        <MultiDatePicker value={details.eventDate} error={errors.eventDate} slots={eventSlots} onChange={(value) => onChange('eventDate', value)} onSlotsChange={onEventSlotsChange} />
         <Field label="Number of guests" required error={errors.guests} hint="Food items are priced per guest">
           <div className="relative">
             <UsersRound size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#9a5b47]" />
@@ -445,6 +454,135 @@ function DiscountBlock({
   );
 }
 
+function MultiDatePicker({ value, error, slots, onChange, onSlotsChange }: { value: string; error?: string; slots: EventSlots; onChange: (value: string) => void; onSlotsChange: (slots: EventSlots) => void }) {
+  const dates = parseEventDates(value);
+  const todayISO = localISODate(new Date());
+  const [open, setOpen] = useState(false);
+  const [viewMonth, setViewMonth] = useState(() => {
+    const base = dates[0] ? new Date(`${dates[0]}T00:00:00`) : new Date();
+    return new Date(base.getFullYear(), base.getMonth(), 1);
+  });
+  const year = viewMonth.getFullYear();
+  const month = viewMonth.getMonth();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (string | null)[] = [
+    ...Array.from({ length: firstWeekday }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, index) => localISODate(new Date(year, month, index + 1))),
+  ];
+  const updateDates = (next: string[]) => {
+    onChange([...next].sort().join(','));
+    const kept: EventSlots = {};
+    next.forEach((date) => { if (slots[date]) kept[date] = slots[date]; });
+    onSlotsChange(kept);
+  };
+  const toggleDate = (iso: string) => updateDates(dates.includes(iso) ? dates.filter((date) => date !== iso) : [...dates, iso]);
+  const toggleSlot = (date: string, id: (typeof ALL_SLOT_IDS)[number]) => {
+    const current = slots[date] ?? [];
+    onSlotsChange({ ...slots, [date]: sortSlots(current.includes(id) ? current.filter((slot) => slot !== id) : [...current, id]) });
+  };
+  const toggleEntireDay = (date: string) => {
+    onSlotsChange({ ...slots, [date]: (slots[date] ?? []).length === ALL_SLOT_IDS.length ? [] : [...ALL_SLOT_IDS] });
+  };
+  const copyFirstToAll = () => {
+    const first = slots[dates[0]] ?? [];
+    const next: EventSlots = {};
+    dates.forEach((date) => { next[date] = [...first]; });
+    onSlotsChange(next);
+  };
+  return (
+    <div data-testid="date-picker">
+      <span className="mb-1.5 flex items-center justify-between gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#5f655e]">
+        <span>Event date &amp; time<span className="ml-1 text-[#9a5b47]">*</span></span>
+        {!error && <span className="normal-case font-normal tracking-normal text-[#8b887f]">Select days, then the time</span>}
+      </span>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="field-control flex h-12 w-full items-center justify-between rounded-xl px-3 text-left text-sm"
+        data-testid="input-event-date"
+      >
+        <span className={dates.length ? 'text-[#263b31]' : 'text-[#9b988f]'}>{dates.length ? `${dates.length} date${dates.length > 1 ? 's' : ''} selected` : 'Select one or more dates'}</span>
+        <CalendarDays size={17} className="text-[#9a5b47]" />
+      </button>
+      {open && (
+        <div className="mt-2 rounded-xl border border-[#e0d3c1] bg-white p-3 shadow-sm" data-testid="calendar-panel">
+          <div className="mb-2 flex items-center justify-between">
+            <button type="button" onClick={() => setViewMonth(new Date(year, month - 1, 1))} aria-label="Previous month" className="grid size-8 place-items-center rounded-lg text-[#864936] hover:bg-[#f6efe4]" data-testid="button-prev-month">‹</button>
+            <strong className="text-sm text-[#263b31]">{viewMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</strong>
+            <button type="button" onClick={() => setViewMonth(new Date(year, month + 1, 1))} aria-label="Next month" className="grid size-8 place-items-center rounded-lg text-[#864936] hover:bg-[#f6efe4]" data-testid="button-next-month">›</button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-[#8b887f]">
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => <span key={index} className="py-1">{day}</span>)}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {cells.map((iso, index) => {
+              if (!iso) return <span key={`blank-${index}`} />;
+              const selected = dates.includes(iso);
+              const past = iso < todayISO;
+              return (
+                <button
+                  key={iso}
+                  type="button"
+                  disabled={past}
+                  onClick={() => toggleDate(iso)}
+                  aria-pressed={selected}
+                  className={`h-9 rounded-lg text-sm font-semibold transition ${selected ? 'bg-[#864936] text-white' : past ? 'cursor-not-allowed text-[#c9c5bb]' : 'text-[#263b31] hover:bg-[#f6efe4]'} ${iso === todayISO && !selected ? 'ring-1 ring-[#b89555]' : ''}`}
+                  data-testid={`button-date-${iso}`}
+                >
+                  {Number(iso.slice(8))}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs font-semibold">
+            <button type="button" onClick={() => updateDates([])} className="text-[#864936] hover:underline" data-testid="button-clear-dates">Clear all</button>
+            <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-[#864936] px-4 py-1.5 text-white" data-testid="button-done-dates">Done</button>
+          </div>
+        </div>
+      )}
+      {dates.length > 0 && (
+        <div className="mt-3 space-y-3" data-testid="selected-dates">
+          {dates.map((date) => {
+            const chosen = slots[date] ?? [];
+            const entire = chosen.length === ALL_SLOT_IDS.length;
+            return (
+              <div key={date} className="rounded-xl border border-[#e0d3c1] bg-[#fbf7ef] p-3" data-testid={`date-card-${date}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <strong className="text-sm text-[#263b31]">{displayDate(date)}</strong>
+                  <button type="button" onClick={() => toggleDate(date)} aria-label={`Remove ${displayDate(date)}`} className="grid size-6 place-items-center rounded-full bg-[#864936] text-sm font-bold leading-none text-white" data-testid={`button-remove-date-${date}`}>×</button>
+                </div>
+                <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#8b887f]">Time slot</p>
+                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  <button type="button" onClick={() => toggleEntireDay(date)} aria-pressed={entire} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${entire ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-entire`}>
+                    Entire day
+                    <span className="mt-0.5 block text-[10px] font-medium opacity-80">All 4 slots</span>
+                  </button>
+                  {SLOTS.map((slot) => {
+                    const on = chosen.includes(slot.id);
+                    return (
+                      <button key={slot.id} type="button" onClick={() => toggleSlot(date, slot.id)} aria-pressed={on} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${on ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-${slot.id}`}>
+                        {slot.label}
+                        <span className="mt-0.5 block text-[10px] font-medium opacity-80">{slot.start} – {slot.end}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>{chosen.length ? slotText(chosen) : 'Pick one or more slots, e.g. Morning + Afternoon.'}</p>
+              </div>
+            );
+          })}
+          {dates.length > 1 && (slots[dates[0]] ?? []).length > 0 && (
+            <button type="button" onClick={copyFirstToAll} className="text-xs font-bold text-[#864936] hover:underline" data-testid="button-copy-slots-all">Use the first date's time for all dates</button>
+          )}
+        </div>
+      )}
+      {error && <span className="mt-1.5 block text-xs font-medium text-[#a13d32]" data-testid="error-event-date">{error}</span>}
+    </div>
+  );
+}
+
 function Field({ label, required, error, hint, children }: { label: string; required?: boolean; error?: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
@@ -461,6 +599,7 @@ function Field({ label, required, error, hint, children }: { label: string; requ
 function SummaryPanel({
   catalog,
   details,
+  eventSlots,
   lines,
   categoryTotals,
   foodPerPlate,
@@ -472,6 +611,8 @@ function SummaryPanel({
   discountLabel,
   grandTotal,
   costPerGuest,
+  showCostPerGuest,
+  onShowCostPerGuestChange,
   onGstChange,
   onGstRateChange,
   onPrint,
@@ -486,6 +627,7 @@ function SummaryPanel({
 }: {
   catalog: Category[];
   details: Details;
+  eventSlots: EventSlots;
   lines: Line[];
   categoryTotals: Record<string, number>;
   foodPerPlate: number;
@@ -497,6 +639,8 @@ function SummaryPanel({
   discountLabel: string;
   grandTotal: number;
   costPerGuest: number;
+  showCostPerGuest: boolean;
+  onShowCostPerGuestChange: (show: boolean) => void;
   onGstChange: (enabled: boolean) => void;
   onGstRateChange: (rate: number) => void;
   onPrint: () => void;
@@ -524,8 +668,16 @@ function SummaryPanel({
         <div className="grid grid-cols-2 gap-x-5 gap-y-4 border-b border-white/15 py-5 text-sm">
           <SummaryDetail label="Customer" value={details.name || 'Awaiting name'} />
           <SummaryDetail label="Occasion" value={displayEventType(details) || 'Awaiting event'} />
-          <SummaryDetail label="Date" value={displayDate(details.eventDate)} />
+          <SummaryDetail label={parseEventDates(details.eventDate).length > 1 ? 'Dates' : 'Date'} value={displayEventDates(details.eventDate)} />
           <SummaryDetail label="Guests" value={details.guests ? `${numberFormat(Number(details.guests))} guests` : 'Not selected'} />
+          {hasAnySlots(eventSlots) && (
+            <div className="col-span-2" data-testid="summary-schedule">
+              <span className="block text-[10px] uppercase tracking-[0.12em] text-[#9fa99e]">Time slots</span>
+              <ul className="mt-1 space-y-1 text-sm font-medium text-[#f7f0e2]">
+                {scheduleLines(parseEventDates(details.eventDate), eventSlots).map((line) => <li key={line.date}><span className="text-[#d6ae60]">{formatEventDates([line.date])}</span> · {slotText(eventSlots[line.date], false)}</li>)}
+              </ul>
+            </div>
+          )}
           <div className="col-span-2"><SummaryDetail label="Mobile number" value={details.mobile || 'Awaiting mobile number'} /></div>
         </div>
 
@@ -592,7 +744,7 @@ function SummaryPanel({
               <div><p className="text-xs uppercase tracking-[0.13em] text-[#c5c9bf]">Grand total</p><p className="mt-1 text-xs text-[#9fa99e]">Estimated for your event</p></div>
               <span className="font-mono text-2xl font-bold tracking-tight text-[#f1d58e]" data-testid="text-grand-total">{currency(grandTotal)}</span>
             </div>
-            <div className="mt-3 flex items-center justify-between rounded-lg bg-white/8 px-3 py-2 text-xs"><span className="text-[#b7c0b4]">Cost per guest</span><span className="font-mono font-bold text-[#f7f0e2]" data-testid="text-cost-per-guest">{currency(costPerGuest)}</span></div>
+            <div className="mt-3 flex items-center justify-between rounded-lg bg-white/8 px-3 py-2 text-xs"><label className="flex cursor-pointer items-center gap-2 text-[#b7c0b4]"><input type="checkbox" checked={showCostPerGuest} onChange={(e) => onShowCostPerGuestChange(e.target.checked)} className="size-4 accent-[#d6ae60]" data-testid="input-show-cost-per-guest" />Cost per guest</label><span className="font-mono font-bold text-[#f7f0e2]" data-testid="text-cost-per-guest">{showCostPerGuest ? currency(costPerGuest) : 'Hidden'}</span></div>
           </div>
         </div>
 
@@ -627,7 +779,8 @@ function SavedEstimateCard({ estimate, onPrint }: { estimate: EstimatePayload; o
         <SavedDetail label="Customer" value={estimate.customer.name} />
         <SavedDetail label="Mobile" value={estimate.customer.mobile} />
         <SavedDetail label="Event" value={estimate.customer.eventType} />
-        <SavedDetail label="Date" value={displayDate(estimate.customer.eventDate)} />
+        <SavedDetail label={quoteEventDates(estimate.customer).length > 1 ? 'Dates' : 'Date'} value={formatEventDates(quoteEventDates(estimate.customer))} />
+        {hasAnySlots(estimate.customer.eventSlots) && <SavedDetail label="Time slots" value={scheduleLines(quoteEventDates(estimate.customer), estimate.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${slotText(estimate.customer.eventSlots?.[line.date], false)}`).join(' · ')} />}
         <SavedDetail label="Guests" value={numberFormat(estimate.customer.guests)} />
         {estimate.customer.gstNumber && <SavedDetail label="Customer GST" value={estimate.customer.gstNumber} />}
       </div>
@@ -642,7 +795,7 @@ function SavedEstimateCard({ estimate, onPrint }: { estimate: EstimatePayload; o
         {estimate.pricing.discountEnabled && (estimate.pricing.discountAmount ?? 0) > 0 && <SavedTotal label={discountLabelText(estimate.pricing.discountPercent ?? 0, estimate.pricing.discountFlat ?? 0)} value={`− ${currency(estimate.pricing.discountAmount ?? 0)}`} />}
         {estimate.pricing.gstEnabled && <SavedTotal label={`GST (${estimate.pricing.gstRate}%)`} value={currency(estimate.pricing.gstAmount)} />}
         <SavedTotal label="Grand total" value={currency(estimate.pricing.grandTotal)} strong />
-        <SavedTotal label="Cost per guest" value={currency(estimate.pricing.costPerGuest)} />
+        {estimate.pricing.showCostPerGuest !== false && <SavedTotal label="Cost per guest" value={currency(estimate.pricing.costPerGuest)} />}
       </div>
        <button type="button" onClick={onPrint} className="saved-print-button mt-4 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg px-3 font-semibold transition" data-testid="button-print-saved-estimate"><Printer size={15} /> Print bill</button>
     </section>
@@ -696,7 +849,7 @@ function PrintServiceTable({ title, lines, details, showLineTotal = true, showDe
 
 function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: PrintData | null }) {
   if (!printData) return null;
-  const { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, billNumber } = printData;
+  const { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots, billNumber } = printData;
   const foodLines = lines.filter((line) => line.categoryId === 'food');
   const otherLines = lines.filter((line) => line.categoryId !== 'food');
   return (
@@ -711,12 +864,18 @@ function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: Pr
            <div><span>Customer</span><strong>{details.name || '—'}</strong></div>
            <div><span>Mobile</span><strong>{details.mobile || '—'}</strong></div>
            <div><span>Event</span><strong>{displayEventType(details) || '—'}</strong></div>
-           <div><span>Date</span><strong>{displayDate(details.eventDate)}</strong></div>
+           <div><span>{parseEventDates(details.eventDate).length > 1 ? 'Dates' : 'Date'}</span><strong>{displayEventDates(details.eventDate)}</strong></div>
            <div><span>Guests</span><strong>{details.guests ? numberFormat(Number(details.guests)) : '—'}</strong></div>
            <div><span>GST</span><strong>{gstEnabled ? `${gstRate}%` : 'Not applied'}</strong></div>
            {gstNumberVisible && gstNumber.trim() && <div><span>Hall GST number</span><strong>{gstNumber}</strong></div>}
            {customerGstNumberVisible && details.customerGstNumber.trim() && <div><span>Customer GST number</span><strong>{details.customerGstNumber}</strong></div>}
          </div>
+         {hasAnySlots(eventSlots) && (
+           <div className="print-schedule">
+             <span>Date &amp; time</span>
+             {scheduleLines(parseEventDates(details.eventDate), eventSlots).map((line) => <p key={line.date}><strong>{formatEventDates([line.date])}</strong> — {line.text}</p>)}
+           </div>
+         )}
        </section>
       {foodLines.length > 0 && <PrintServiceTable title="Food & Catering" lines={foodLines} details={details} showLineTotal={false} showDescription={SHOW_DESCRIPTION_FOR_FOOD} />}
       {otherLines.length > 0 && <PrintServiceTable title="Additional services" lines={otherLines} details={details} />}
@@ -728,7 +887,7 @@ function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: Pr
         {discountAmount > 0 && <div className="print-total-row"><span>{discountLabel}</span><strong>− {currency(discountAmount)}</strong></div>}
         {gstEnabled && <div className="print-total-row"><span>GST ({gstRate}%)</span><strong>{currency(gstAmount)}</strong></div>}
         <div className="print-total-row print-grand"><span>Grand total</span><strong>{currency(grandTotal)}</strong></div>
-        <div className="print-total-row"><span>Cost per guest</span><strong>{currency(costPerGuest)}</strong></div>
+        {showCostPerGuest && <div className="print-total-row"><span>Cost per guest</span><strong>{currency(costPerGuest)}</strong></div>}
       </div>
        <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
     </main>
@@ -744,6 +903,8 @@ function EstimatorPage() {
   const [hallGstNumber, setHallGstNumber] = useState('');
   const [gstNumberVisible, setGstNumberVisible] = useState(true);
   const [customerGstNumberVisible, setCustomerGstNumberVisible] = useState(true);
+  const [eventSlots, setEventSlots] = useState<EventSlots>({});
+  const [showCostPerGuest, setShowCostPerGuest] = useState(true);
   const [discountEnabled, setDiscountEnabled] = useState(false);
   const [discountPercent, setDiscountPercent] = useState('');
   const [discountFlat, setDiscountFlat] = useState('');
@@ -786,6 +947,8 @@ function EstimatorPage() {
           hallGstNumber?: string;
           gstNumberVisible?: boolean;
            customerGstNumberVisible?: boolean;
+          eventSlots?: EventSlots;
+          showCostPerGuest?: boolean;
           discountEnabled?: boolean;
           discountPercent?: string;
           discountFlat?: string;
@@ -797,6 +960,8 @@ function EstimatorPage() {
         if (typeof draft.hallGstNumber === 'string') setHallGstNumber(draft.hallGstNumber.slice(0, 15));
         if (typeof draft.gstNumberVisible === 'boolean') setGstNumberVisible(draft.gstNumberVisible);
          if (typeof draft.customerGstNumberVisible === 'boolean') setCustomerGstNumberVisible(draft.customerGstNumberVisible);
+        if (draft.eventSlots && typeof draft.eventSlots === 'object') setEventSlots(draft.eventSlots);
+        if (typeof draft.showCostPerGuest === 'boolean') setShowCostPerGuest(draft.showCostPerGuest);
         if (typeof draft.discountEnabled === 'boolean') setDiscountEnabled(draft.discountEnabled);
         if (typeof draft.discountPercent === 'string') setDiscountPercent(draft.discountPercent);
         if (typeof draft.discountFlat === 'string') setDiscountFlat(draft.discountFlat);
@@ -811,11 +976,11 @@ function EstimatorPage() {
   useEffect(() => {
     if (!isHydrated) return;
     try {
-       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, discountEnabled, discountPercent, discountFlat }));
+       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat }));
     } catch {
       // The estimator remains usable when browser storage is unavailable.
     }
-  }, [details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, discountEnabled, discountPercent, discountFlat, isHydrated]);
+  }, [details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, isHydrated]);
 
   const guestCount = Number(details.guests) || 0;
   const lines = useMemo<Line[]>(() => catalog.flatMap((category) => category.subcategories.flatMap((subcategory) => subcategory.items.filter((item) => item.active))).flatMap((item) => {
@@ -841,6 +1006,7 @@ function EstimatorPage() {
   const discountFlatValue = discountEnabled ? Math.max(0, Number(discountFlat) || 0) : 0;
   const discountAmount = Math.min(subtotal, Math.round(subtotal * (discountPercentValue / 100)) + discountFlatValue);
   const discountLabel = discountLabelText(discountPercentValue, discountFlatValue);
+  const eventSlotsForDates: EventSlots = Object.fromEntries(parseEventDates(details.eventDate).map((date) => [date, sortSlots(eventSlots[date])]));
   const taxableAmount = subtotal - discountAmount;
   const gstAmount = gstEnabled ? taxableAmount * (gstRate / 100) : 0;
   const grandTotal = taxableAmount + gstAmount;
@@ -872,8 +1038,13 @@ function EstimatorPage() {
     if (!/^[6-9]\d{9}$/.test(mobileDigits.slice(-10))) nextErrors.mobile = 'Enter a valid 10 digit mobile number.';
     if (!details.eventType) nextErrors.eventType = 'Choose an event type.';
     if (details.eventType === 'Other' && !details.otherEventType.trim()) nextErrors.otherEventType = 'Describe the occasion you are planning.';
-    if (!details.eventDate) nextErrors.eventDate = 'Choose the event date.';
-    else if (details.eventDate < new Date().toISOString().split('T')[0]) nextErrors.eventDate = 'Choose a future date.';
+    const chosenDates = parseEventDates(details.eventDate);
+    if (!chosenDates.length) nextErrors.eventDate = 'Choose at least one event date.';
+    else if (chosenDates.some((date) => date < localISODate(new Date()))) nextErrors.eventDate = 'Choose future dates only.';
+    else {
+      const missingSlot = chosenDates.find((date) => !eventSlotsForDates[date]?.length);
+      if (missingSlot) nextErrors.eventDate = `Choose a time slot for ${formatEventDates([missingSlot])}.`;
+    }
     if (!Number.isInteger(guestCount) || guestCount <= 0) nextErrors.guests = 'Guests must be more than zero.';
     if (!details.billNumber.trim()) nextErrors.billNumber = 'Enter a bill number.';
     setErrors(nextErrors);
@@ -886,7 +1057,9 @@ function EstimatorPage() {
       name: details.name,
       mobile: details.mobile,
       eventType: displayEventType(details),
-      eventDate: details.eventDate,
+      eventDate: parseEventDates(details.eventDate)[0] ?? '',
+      eventDates: parseEventDates(details.eventDate),
+      eventSlots: eventSlotsForDates,
       guests: guestCount,
       gstNumber: details.customerGstNumber,
       // The API keeps this legacy field for compatibility; the customer no longer
@@ -904,18 +1077,18 @@ function EstimatorPage() {
       total: line.total,
       description: line.description,
     })),
-    pricing: { foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, discountEnabled: discountAmount > 0, discountPercent: discountPercentValue, discountFlat: discountFlatValue, discountAmount, grandTotal, costPerGuest },
+    pricing: { foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, showCostPerGuest, discountEnabled: discountAmount > 0, discountPercent: discountPercentValue, discountFlat: discountFlatValue, discountAmount, grandTotal, costPerGuest },
   });
 
   const estimateMessage = () => {
     const payload = buildEstimatePayload();
     const serviceText = payload.services.length ? payload.services.map((service) => `• ${service.name} (${service.pricingType === 'perPerson' ? `${payload.customer.guests} guests` : `qty ${service.quantity}`}): ${isFoodCategory(service.category) ? `${currency(service.unitPrice)} ${serviceRateLabel(service.pricingType)}` : currency(service.total)}`).join('\n') : 'No additional services selected';
-     return `Hello ${BANQUET_NAME}, I would like to discuss this quotation.\n\nBill No: ${payload.reference || 'Not assigned'}\nCustomer: ${payload.customer.name || 'Not provided'}\nMobile: ${payload.customer.mobile || 'Not provided'}\nEvent: ${payload.customer.eventType || 'Not provided'}\nDate: ${displayDate(payload.customer.eventDate)}\nGuests: ${payload.customer.guests || 'Not provided'}\n${payload.customer.gstNumber ? `Customer GST number: ${payload.customer.gstNumber}\n` : ''}${payload.pricing.gstNumberVisible && payload.pricing.gstNumber ? `Hall GST number: ${payload.pricing.gstNumber}\n` : ''}\nSelected services:\n${serviceText}\n\nFood price per plate: ${currency(payload.pricing.foodPerPlate)}\nSubtotal: ${currency(payload.pricing.subtotal)}\n${payload.pricing.discountEnabled && (payload.pricing.discountAmount ?? 0) > 0 ? `${discountLabelText(payload.pricing.discountPercent ?? 0, payload.pricing.discountFlat ?? 0)}: -${currency(payload.pricing.discountAmount ?? 0)}\n` : ''}${payload.pricing.gstEnabled ? `GST (${payload.pricing.gstRate}%): ${currency(payload.pricing.gstAmount)}\n` : ''}Grand total: ${currency(payload.pricing.grandTotal)}\nCost per guest: ${currency(payload.pricing.costPerGuest)}`;
+     return `Hello ${BANQUET_NAME}, I would like to discuss this quotation.\n\nBill No: ${payload.reference || 'Not assigned'}\nCustomer: ${payload.customer.name || 'Not provided'}\nMobile: ${payload.customer.mobile || 'Not provided'}\nEvent: ${payload.customer.eventType || 'Not provided'}\n${hasAnySlots(payload.customer.eventSlots) ? `Date & time:\n${scheduleLines(quoteEventDates(payload.customer), payload.customer.eventSlots).map((line) => `• ${formatEventDates([line.date])}: ${line.text}`).join('\n')}` : `Date: ${formatEventDates(quoteEventDates(payload.customer))}`}\nGuests: ${payload.customer.guests || 'Not provided'}\n${payload.customer.gstNumber ? `Customer GST number: ${payload.customer.gstNumber}\n` : ''}${payload.pricing.gstNumberVisible && payload.pricing.gstNumber ? `Hall GST number: ${payload.pricing.gstNumber}\n` : ''}\nSelected services:\n${serviceText}\n\nFood price per plate: ${currency(payload.pricing.foodPerPlate)}\nSubtotal: ${currency(payload.pricing.subtotal)}\n${payload.pricing.discountEnabled && (payload.pricing.discountAmount ?? 0) > 0 ? `${discountLabelText(payload.pricing.discountPercent ?? 0, payload.pricing.discountFlat ?? 0)}: -${currency(payload.pricing.discountAmount ?? 0)}\n` : ''}${payload.pricing.gstEnabled ? `GST (${payload.pricing.gstRate}%): ${currency(payload.pricing.gstAmount)}\n` : ''}Grand total: ${currency(payload.pricing.grandTotal)}${payload.pricing.showCostPerGuest !== false ? `\nCost per guest: ${currency(payload.pricing.costPerGuest)}` : ''}`;
   };
 
   const buildPrintData = (payload?: EstimatePayload): PrintData => {
     if (!payload) {
-       return { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, billNumber: details.billNumber };
+       return { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots: eventSlotsForDates, billNumber: details.billNumber };
     }
 
     const savedLines: PrintableLine[] = payload.services.map((service) => {
@@ -938,7 +1111,7 @@ function EstimatorPage() {
       return totals;
     }, {});
     return {
-       details: { name: payload.customer.name, mobile: payload.customer.mobile, eventType: payload.customer.eventType, otherEventType: '', eventDate: payload.customer.eventDate, guests: String(payload.customer.guests), billNumber: payload.reference, customerGstNumber: payload.customer.gstNumber ?? '' },
+       details: { name: payload.customer.name, mobile: payload.customer.mobile, eventType: payload.customer.eventType, otherEventType: '', eventDate: quoteEventDates(payload.customer).join(','), guests: String(payload.customer.guests), billNumber: payload.reference, customerGstNumber: payload.customer.gstNumber ?? '' },
       lines: savedLines,
       categoryTotals: savedCategoryTotals,
       foodPerPlate: payload.pricing.foodPerPlate,
@@ -953,6 +1126,8 @@ function EstimatorPage() {
       discountLabel: discountLabelText(payload.pricing.discountPercent ?? 0, payload.pricing.discountFlat ?? 0),
       grandTotal: payload.pricing.grandTotal,
       costPerGuest: payload.pricing.costPerGuest,
+      showCostPerGuest: payload.pricing.showCostPerGuest !== false,
+      eventSlots: payload.customer.eventSlots ?? {},
        billNumber: payload.reference,
     };
   };
@@ -1024,6 +1199,8 @@ function EstimatorPage() {
       setHallGstNumber('');
       setGstNumberVisible(true);
        setCustomerGstNumberVisible(true);
+      setEventSlots({});
+      setShowCostPerGuest(true);
       setDiscountEnabled(false);
       setDiscountPercent('');
       setDiscountFlat('');
@@ -1070,7 +1247,7 @@ function EstimatorPage() {
 
           <div className="mt-8 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_390px] xl:gap-10">
             <div className="space-y-6">
-              <EventDetails details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
+              <EventDetails eventSlots={eventSlots} onEventSlotsChange={setEventSlots} details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
               <DiscountBlock enabled={discountEnabled} percent={discountPercent} flat={discountFlat} discountAmount={discountAmount} onEnabledChange={setDiscountEnabled} onPercentChange={setDiscountPercent} onFlatChange={setDiscountFlat} />
                <section className="page-enter stagger-1">
                 <div className="mb-5 flex items-end justify-between gap-4 px-1">
@@ -1082,7 +1259,7 @@ function EstimatorPage() {
                  {catalog.length === 0 ? <div className="rounded-2xl border border-dashed border-[#d8cbbb] bg-[#fffdf8] p-8 text-center text-sm text-[#77756e]">Services are being refreshed. Please check back shortly.</div> : <div className="space-y-3">{catalog.map((category) => <CategoryCard key={category.id} category={category} selections={selections} onToggle={onToggle} onQuantityChange={onQuantityChange} />)}</div>}
               </section>
             </div>
-             <SummaryPanel catalog={catalog} details={details} lines={lines} categoryTotals={categoryTotals} foodPerPlate={foodPerPlate} subtotal={subtotal} gstEnabled={gstEnabled} gstRate={gstRate} gstAmount={gstAmount} discountAmount={discountAmount} discountLabel={discountLabel} grandTotal={grandTotal} costPerGuest={costPerGuest} onGstChange={setGstEnabled} onGstRateChange={setGstRate} onPrint={printEstimate} onPrintSaved={printSavedEstimate} onCopy={copyEstimate} copyStatus={copyStatus} onWhatsApp={sendWhatsApp} onSaveEstimate={saveEstimate} saveStatus={saveStatus} savedEstimate={savedEstimate} onReset={resetEstimate} />
+             <SummaryPanel catalog={catalog} details={details} eventSlots={eventSlotsForDates} lines={lines} categoryTotals={categoryTotals} foodPerPlate={foodPerPlate} subtotal={subtotal} gstEnabled={gstEnabled} gstRate={gstRate} gstAmount={gstAmount} discountAmount={discountAmount} discountLabel={discountLabel} grandTotal={grandTotal} costPerGuest={costPerGuest} showCostPerGuest={showCostPerGuest} onShowCostPerGuestChange={setShowCostPerGuest} onGstChange={setGstEnabled} onGstRateChange={setGstRate} onPrint={printEstimate} onPrintSaved={printSavedEstimate} onCopy={copyEstimate} copyStatus={copyStatus} onWhatsApp={sendWhatsApp} onSaveEstimate={saveEstimate} saveStatus={saveStatus} savedEstimate={savedEstimate} onReset={resetEstimate} />
           </div>
         </main>
         <div className="mobile-dock fixed inset-x-0 bottom-0 z-20 flex items-center justify-between gap-4 border-t border-[#ded1bf] bg-[#fffdf8]/90 px-5 py-3 lg:hidden">

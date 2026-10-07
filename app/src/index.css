@@ -724,6 +724,9 @@
   .print-table th:nth-child(1), .print-table td:nth-child(1) { width: 22%; }
   .print-table th:nth-child(2), .print-table td:nth-child(2) { width: 38%; }
   .print-subcategory { display: block; color: #7a756c; font-size: 7px; }
+  .print-schedule { margin-top: 8px; font-size: 9px; color: #34483c; }
+  .print-schedule span { display: block; margin-bottom: 3px; color: #8a867c; font-size: 7px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .print-schedule p { margin: 2px 0; }
   .print-item-description { display: block; margin-top: 2px; color: #6e6a61; font-size: 7.5px; line-height: 1.35; overflow-wrap: anywhere; white-space: pre-line; }
   .print-table th:last-child, .print-table td:last-child { text-align: right; }
   .print-totals { margin-left: auto; width: 220px; margin-top: 8px; }

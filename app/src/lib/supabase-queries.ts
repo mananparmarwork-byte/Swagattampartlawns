@@ -1,3 +1,4 @@
+import type { EventSlots } from '@/lib/booking';
 import {
   useMutation,
   useQuery,
@@ -24,6 +25,8 @@ export type QuoteCustomer = {
   mobile: string;
   eventType: string;
   eventDate: string;
+  eventDates?: string[];
+  eventSlots?: EventSlots;
   guests: number;
   gstNumber?: string;
   hall: string;
@@ -37,6 +40,9 @@ export type QuotePricing = {
   gstAmount: number;
   gstNumber: string;
   gstNumberVisible: boolean;
+  showCostPerGuest?: boolean;
+  eventDates?: string[];
+  eventSlots?: EventSlots;
   discountEnabled?: boolean;
   discountPercent?: number;
   discountFlat?: number;
@@ -74,6 +80,24 @@ type QuoteRow = {
   created_at: string;
 };
 
+// Several event dates are kept in one text value as 'YYYY-MM-DD,YYYY-MM-DD'.
+export function parseEventDates(value: string): string[] {
+  return Array.from(new Set((value || '').split(',').map((date) => date.trim()).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)))).sort();
+}
+
+export function formatEventDates(dates: string[]): string {
+  if (!dates.length) return 'Not selected';
+  const fmt = (date: string, options: Intl.DateTimeFormatOptions) => new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', options);
+  if (dates.length === 1) return fmt(dates[0], { day: '2-digit', month: 'short', year: 'numeric' });
+  const groups = new Map<string, string[]>();
+  dates.forEach((date) => groups.set(date.slice(0, 7), [...(groups.get(date.slice(0, 7)) ?? []), date]));
+  return Array.from(groups.values()).map((group) => `${group.map((date) => date.slice(8)).join(', ')} ${fmt(group[0], { month: 'short', year: 'numeric' })}`).join(' · ');
+}
+
+export function quoteEventDates(customer: { eventDate: string; eventDates?: string[] }): string[] {
+  return customer.eventDates && customer.eventDates.length ? customer.eventDates : parseEventDates(customer.eventDate);
+}
+
 export const getGetCatalogQueryKey = () => ['supabase', 'catalog'] as const;
 export const getListQuotesQueryKey = () => ['supabase', 'quotes'] as const;
 export const getGetQuoteQueryKey = (reference: string) => ['supabase', 'quote', reference] as const;
@@ -87,6 +111,8 @@ function fromQuoteRow(row: QuoteRow): Quote {
       mobile: row.mobile,
       eventType: row.event_type,
       eventDate: row.event_date,
+      eventDates: Array.isArray(row.pricing?.eventDates) && row.pricing.eventDates.length ? row.pricing.eventDates : [row.event_date],
+      eventSlots: row.pricing?.eventSlots && typeof row.pricing.eventSlots === 'object' ? row.pricing.eventSlots : {},
       guests: row.guests,
       gstNumber: row.customer_gst_number ?? '',
       hall: row.hall,
@@ -146,7 +172,7 @@ export function useCreateQuote() {
           customer_gst_number: input.customer.gstNumber ?? '',
           hall: input.customer.hall,
           services: input.services,
-          pricing: input.pricing,
+          pricing: { ...input.pricing, eventDates: input.customer.eventDates ?? [input.customer.eventDate], eventSlots: input.customer.eventSlots ?? {} },
           status: 'new',
         })
         .select('*')
@@ -193,6 +219,23 @@ export function useDeleteQuote() {
     mutationFn: async ({ reference }) => {
       const { error } = await requireSupabase().from('quotes').delete().eq('reference', reference);
       if (error) throw error;
+    },
+  });
+}
+
+// Ticking "Booked" in the admin panel marks the bill as confirmed (status = 'confirmed'); unticking returns it to 'new'.
+export function useSetQuoteBooked() {
+  return useMutation<void, Error, { reference: string; booked: boolean }>({
+    mutationFn: async ({ reference, booked }) => {
+      const { data, error } = await requireSupabase()
+        .from('quotes')
+        .update({ status: booked ? 'confirmed' : 'new' })
+        .eq('reference', reference)
+        .select('reference');
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Supabase did not allow this change. Run the file supabase/02-booking-update.sql once in the Supabase SQL Editor, then try again.');
+      }
     },
   });
 }
