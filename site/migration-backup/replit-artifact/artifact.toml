@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Swagattam Party Lawns"
+description = "A polished event venue website for Swagattam Party Lawns, showcasing celebrations, venue spaces, galleries, and booking contact details."
+version = "1.0.0"
+id = "artifacts/swagattam-party-lawns"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18378
+
+[services.development]
+run = "pnpm --filter @workspace/swagattam-party-lawns run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/swagattam-party-lawns", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/swagattam-party-lawns/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18378"
+BASE_PATH = "/"
