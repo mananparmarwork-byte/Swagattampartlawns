@@ -6,17 +6,16 @@ import {
   getListQuotesQueryKey,
   quotePaymentState,
   useUpdateQuotePricing,
-  type PaymentKind,
   type PaymentMethod,
   type PaymentState,
   type Quote,
   type QuotePayment,
 } from '@/lib/supabase-queries';
 import { bankDetailsText, buildUpiUri, isValidUpiId, newPaymentId, whatsappLink } from '@/lib/payments';
+import { qrPngBlob } from '@/lib/qr-image';
 import { UpiQr } from '@/components/upi-qr';
-import { scrollToPaymentAccount, usePaymentSettings } from '@/components/payment-settings';
+import { openPaymentSettings, usePaymentSettings } from '@/components/payment-settings';
 
-const ADVANCE_PERCENT = 25;
 const money = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
 const dateTime = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -53,21 +52,22 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
   const loggedTotal = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const earlierAdvance = Math.max(0, received - loggedTotal); // advance typed on the bill itself (not collected here)
 
-  const [kind, setKind] = useState<PaymentKind>(balance > 0 && received === 0 ? 'advance' : 'full');
   const [method, setMethod] = useState<PaymentMethod>('upi');
-  const suggested = kind === 'full' ? balance : Math.min(balance, Math.max(1, Math.round((pricing.grandTotal * ADVANCE_PERCENT) / 100)));
-  const [amount, setAmount] = useState(String(suggested));
+  // The amount is always the whole remaining balance. Advances are noted on the bill itself (booking form).
+  const [amount, setAmount] = useState(String(balance));
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const { settings } = usePaymentSettings();
   const [copied, setCopied] = useState('');
+  const [qrBlob, setQrBlob] = useState<Blob | null>(null);
+  const [shareNote, setShareNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 
-  // Amount is filled in automatically from the bill: full payment = whatever balance is left.
-  useEffect(() => { setAmount(String(suggested)); }, [suggested]);
+  // Amount is filled in automatically from the bill: whatever balance is left.
+  useEffect(() => { setAmount(String(balance)); }, [balance]);
 
   const typed = Math.round(Math.max(0, Number(amount) || 0) * 100) / 100;
   const applied = Math.min(typed, balance);
   const upiReady = isValidUpiId(settings.upiId);
-  const upiUri = upiReady && applied > 0 ? buildUpiUri(settings, applied, `${kind === 'full' ? 'Payment' : 'Advance'} ${quote.reference}`) : '';
+  const upiUri = upiReady && applied > 0 ? buildUpiUri(settings, applied, `Payment ${quote.reference}`) : '';
   const progress = pricing.grandTotal > 0 ? Math.min(100, Math.round((received / pricing.grandTotal) * 100)) : 0;
   const bankText = bankDetailsText(settings);
 
@@ -81,7 +81,7 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
   const record = (via: PaymentMethod) => {
     if (applied <= 0) { setMessage({ kind: 'error', text: 'Enter an amount greater than zero.' }); return; }
     setMessage(null);
-    const entry: QuotePayment = { id: newPaymentId(), amount: applied, method: via, kind: applied >= balance ? 'full' : kind, paidAt: new Date().toISOString() };
+    const entry: QuotePayment = { id: newPaymentId(), amount: applied, method: via, kind: 'full', paidAt: new Date().toISOString() };
     const nextReceived = Math.min(pricing.grandTotal, received + applied);
     mutation.mutate({
       reference: quote.reference,
@@ -106,7 +106,70 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
     try { await navigator.clipboard.writeText(text); setCopied(label); window.setTimeout(() => setCopied(''), 1800); } catch { setCopied(''); }
   };
 
-  const requestText = `Hello ${quote.customer.name}, this is ${settings.payeeName}. Please pay ${money(applied)} (${kind === 'full' || applied >= balance ? 'full payment' : 'advance'}) for your booking ${quote.reference}.\n\nUPI ID: ${settings.upiId}\nPayee: ${settings.payeeName}\nAmount: ${money(applied)}${received > 0 ? `\nAlready paid: ${money(received)}` : ''}\nBalance after this payment: ${money(Math.max(0, balance - applied))}${bankText ? `\n\nBank transfer details:\n${bankText}` : ''}\n\nYou can pay from Google Pay, PhonePe, Paytm or any UPI app. Please share the screenshot after paying. Thank you!`;
+  const eventName = quote.customer.eventType?.trim();
+  const requestText = [
+    `Hello ${quote.customer.name}, this is ${settings.payeeName}. Please pay ${money(applied)} (full payment) for your ${eventName ? `${eventName} ` : ''}booking.`,
+    '',
+    `UPI ID: ${settings.upiId}`,
+    `Payee: ${settings.payeeName}`,
+    `Amount: ${money(applied)}`,
+    ...(received > 0 ? [`Already paid: ${money(received)}`] : []),
+    `Balance after this payment: ${money(Math.max(0, balance - applied))}`,
+    '',
+    `Pay link: ${upiUri}`,
+    '',
+    'You can pay from Google Pay, PhonePe, Paytm or any UPI app. Please share the screenshot after paying. Thank you!',
+  ].join('\n');
+
+  // Prepare the QR picture ahead of time so the WhatsApp button can use it instantly.
+  useEffect(() => {
+    let cancelled = false;
+    setQrBlob(null);
+    if (!upiUri) return undefined;
+    qrPngBlob(upiUri, { title: settings.payeeName, amount: money(applied) }).then((blob) => { if (!cancelled) setQrBlob(blob); }).catch(() => { if (!cancelled) setQrBlob(null); });
+    return () => { cancelled = true; };
+  }, [upiUri, settings.payeeName, applied]);
+
+  const downloadQr = (blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `payment-qr-${quote.customer.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'customer'}.png`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  // Send on WhatsApp: the message goes as text and the QR code goes as a photo.
+  //  - Phone: the share sheet sends the QR picture with the message as its caption.
+  //  - Computer: the QR picture is copied, WhatsApp opens on the customer's chat with the message ready, and
+  //    pressing Ctrl+V (Cmd+V on Mac) in that chat sends the QR as a photo. If copying is blocked, the picture is downloaded.
+  const sendOnWhatsApp = async () => {
+    setShareNote(null);
+    const file = qrBlob ? new File([qrBlob], 'payment-qr.png', { type: 'image/png' }) : null;
+    const isTouchDevice = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    if (file && isTouchDevice && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], text: requestText });
+        setShareNote({ kind: 'ok', text: 'Choose WhatsApp and the customer. The QR photo is sent with the message.' });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        // Any other failure falls through to the normal WhatsApp link below.
+      }
+    }
+    const popup = window.open(whatsappLink(quote.customer.mobile, requestText), '_blank');
+    if (!qrBlob) { setShareNote({ kind: 'error', text: 'The message is ready, but the QR picture could not be prepared. Take a screenshot of the QR code to send it.' }); return; }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': qrBlob })]);
+      setShareNote({ kind: 'ok', text: 'QR photo copied. In the WhatsApp chat that just opened, press Ctrl+V (Cmd+V on Mac) and send it.' });
+    } catch {
+      downloadQr(qrBlob);
+      setShareNote({ kind: 'ok', text: 'QR photo downloaded. Attach it in the WhatsApp chat using the + (attach) button.' });
+    }
+    if (!popup) setShareNote({ kind: 'error', text: 'Your browser blocked the WhatsApp window. Allow pop-ups for this site and try again.' });
+  };
 
   return (
     <div className="rounded-xl border border-[#e3d8c9] bg-[#fffdf8] p-3 sm:p-4" data-testid="box-payment-panel">
@@ -146,18 +209,13 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
       ) : (
         <div className="mt-4 space-y-3 border-t border-[#eee6d9] pt-4" data-testid="form-collect-payment">
           <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#9a5b47]">Collect payment</p>
-          <Segmented name="payment-kind" value={kind} onChange={setKind} options={[
-            { id: 'advance', label: 'Advance', note: `Suggested ${ADVANCE_PERCENT}% of the bill` },
-            { id: 'full', label: 'Full payment', note: 'Whole remaining balance' },
-          ]} />
           <label className="block">
-            <span className="mb-1 block text-xs font-bold text-[#263b31]">Amount to collect {kind === 'full' ? '(filled from the balance)' : '(you can change it)'}</span>
+            <span className="mb-1 block text-xs font-bold text-[#263b31]">Amount to collect (filled from the balance)</span>
             <div className="relative max-w-xs">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-bold text-[#9a5b47]">₹</span>
-              <input type="number" min="1" max={balance} step="1" value={amount} readOnly={kind === 'full'} onChange={(e) => setAmount(e.target.value)} className="field-control h-11 w-full rounded-xl pl-7 pr-3 text-sm font-semibold read-only:bg-[#f6efe2]" aria-label="Amount to collect in rupees" data-testid="input-collect-amount" />
+              <input type="number" min="1" max={balance} step="1" value={amount} readOnly onChange={(e) => setAmount(e.target.value)} className="field-control h-11 w-full rounded-xl pl-7 pr-3 text-sm font-semibold read-only:bg-[#f6efe2]" aria-label="Amount to collect in rupees" data-testid="input-collect-amount" />
             </div>
-            {typed > balance && <span className="mt-1 block text-[11px] text-[#a13d32]">More than the balance; only {money(balance)} will be recorded.</span>}
-          </label>
+                      </label>
           <Segmented name="payment-method" value={method} onChange={setMethod} options={[
             { id: 'upi', label: 'UPI / QR', note: 'Google Pay, PhonePe, Paytm…', icon: <QrCode size={13} /> },
             { id: 'cash', label: 'Cash', note: 'Received in hand', icon: <Banknote size={13} /> },
@@ -166,7 +224,7 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
           {method === 'upi' ? (
             <div className="rounded-xl border border-[#eee6d9] bg-white p-3" data-testid="box-upi">
               {!upiReady ? (
-                <p className="text-xs text-[#a13d32]">Add your UPI ID in the <button type="button" onClick={scrollToPaymentAccount} className="font-bold underline" data-testid="link-go-payment-account">Payment account</button> section to create the QR code.</p>
+                <p className="text-xs text-[#a13d32]">Add your UPI ID in <button type="button" onClick={openPaymentSettings} className="font-bold underline" data-testid="link-go-payment-account">Settings → Payment account</button> to create the QR code.</p>
               ) : applied <= 0 ? (
                 <p className="text-xs text-[#a13d32]">Enter an amount to create the QR code.</p>
               ) : (
@@ -176,12 +234,11 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
                     <p className="text-xs text-[#5f655e]">Ask the customer to scan this with any UPI app. The amount <strong className="font-mono text-[#864936]">{money(applied)}</strong> is already filled in.</p>
                     <p className="break-all font-mono text-[11px] text-[#77736D]">{settings.upiId} · {settings.payeeName}</p>
                     <div className="flex flex-wrap justify-center gap-2 sm:justify-start">
-                      <a href={upiUri} className="admin-secondary" data-testid="link-open-upi"><Smartphone size={14} /> Open UPI app</a>
                       <button type="button" onClick={() => void copy('link', upiUri)} className="admin-secondary" data-testid="button-copy-upi-link"><Copy size={14} /> {copied === 'link' ? 'Copied' : 'Copy link'}</button>
-                      <button type="button" onClick={() => void copy('id', settings.upiId)} className="admin-secondary" data-testid="button-copy-upi-id"><Copy size={14} /> {copied === 'id' ? 'Copied' : 'Copy UPI ID'}</button>
                       {bankText && <button type="button" onClick={() => void copy('bank', bankText)} className="admin-secondary" data-testid="button-copy-bank"><Landmark size={14} /> {copied === 'bank' ? 'Copied' : 'Copy bank details'}</button>}
-                      <a href={whatsappLink(quote.customer.mobile, requestText)} target="_blank" rel="noreferrer" className="admin-secondary" data-testid="link-whatsapp-payment"><MessageCircle size={14} /> Send on WhatsApp</a>
+                      <button type="button" onClick={() => void sendOnWhatsApp()} className="admin-secondary" data-testid="button-whatsapp-payment"><MessageCircle size={14} /> Send on WhatsApp</button>
                     </div>
+                    {shareNote && <p className={`rounded-lg px-3 py-2 text-left text-[11px] ${shareNote.kind === 'ok' ? 'bg-[#e8f3ea] text-[#2f6b44]' : 'bg-[#fff7f3] text-[#73483b]'}`} role={shareNote.kind === 'ok' ? 'status' : 'alert'} data-testid="status-whatsapp-share">{shareNote.text}</p>}
                   </div>
                 </div>
               )}
@@ -198,7 +255,7 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[#eee6d9] pt-3 text-[11px] text-[#77736D]">
         <span className="flex min-w-0 items-center gap-1.5"><Landmark size={13} className="shrink-0 text-[#9a5b47]" /> <span className="truncate">Money goes to: {upiReady ? `${settings.upiId} (${settings.payeeName})` : 'UPI ID not set'}</span></span>
-        <button type="button" onClick={scrollToPaymentAccount} className="admin-link" data-testid="button-open-payment-account"><Settings2 size={13} /> Change payment account</button>
+        <button type="button" onClick={openPaymentSettings} className="admin-link" data-testid="button-open-payment-account"><Settings2 size={13} /> Change payment account</button>
       </div>
     </div>
   );

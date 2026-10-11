@@ -21,8 +21,10 @@ export function usePaymentSettings(): { settings: PaymentSettings; cloudSaved: b
   return { settings: cloud ?? local, cloudSaved: Boolean(cloud), cloudAvailable: query.data?.available ?? false, isLoading: query.isLoading };
 }
 
-export function scrollToPaymentAccount() {
-  document.getElementById('payment-account')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+// The payment account editor lives in the admin Settings panel. Anything that needs it asks the panel to open.
+export const OPEN_SETTINGS_EVENT = 'swagattam:open-settings';
+export function openPaymentSettings() {
+  window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'payment' } }));
 }
 
 function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: ReactNode }) {
@@ -71,7 +73,7 @@ export function PaymentSettingsSection() {
 
   const input = 'field-control h-11 w-full rounded-xl px-3 text-sm';
   return (
-    <section id="payment-account" className="admin-panel mt-8 scroll-mt-6 rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] p-4 shadow-[0_14px_40px_rgba(98,67,36,.035)] sm:p-5" data-testid="section-payment-account">
+    <section id="payment-account" className="admin-panel rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] p-4 sm:p-5" data-testid="section-payment-account">
       <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#eee6d9] pb-4">
         <div>
           <p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9a5b47]">Receiving money</p>
@@ -99,7 +101,7 @@ export function PaymentSettingsSection() {
 
           <div>
             <p className="mb-1 flex items-center gap-2 text-sm font-semibold text-[#263b31]"><Landmark size={16} className="text-[#c86b45]" /> Bank account (optional)</p>
-            <p className="mb-3 text-xs text-[#77736D]">Only for customers who prefer a bank transfer (NEFT / IMPS). These details are included in the WhatsApp payment message.</p>
+            <p className="mb-3 text-xs text-[#77736D]">Only for customers who prefer a bank transfer (NEFT / IMPS). Use the "Copy bank details" button on a bill to share them.</p>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Account holder name"><input value={form.accountHolder} onChange={(e) => set('accountHolder', e.target.value)} className={input} data-testid="input-bank-holder" /></Field>
               <Field label="Bank name"><input value={form.bankName} onChange={(e) => set('bankName', e.target.value)} className={input} data-testid="input-bank-name" /></Field>

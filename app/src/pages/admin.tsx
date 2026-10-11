@@ -22,13 +22,15 @@ import {
 import { findConflicts, hasAnySlots, scheduleLines, slotText } from '@/lib/booking';
 import { OccupancyCalendar } from '@/components/occupancy-calendar';
 import { PaymentBadge, PaymentPanel } from '@/components/payment-panel';
-import { PaymentSettingsSection } from '@/components/payment-settings';
+import { OPEN_SETTINGS_EVENT, PaymentSettingsSection } from '@/components/payment-settings';
 import type { Quote } from '@/lib/supabase-queries';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { ArrowDown, ArrowLeft, ArrowUp, BadgeCheck, Banknote, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, FileText, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, BadgeCheck, Banknote, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Landmark, Pencil, FileText, Plus, Printer, RotateCcw, Save, Settings, Sparkles, Trash2, X } from 'lucide-react';
 import { Link } from 'wouter';
 import { CATALOG_UPDATED_EVENT, ORIGINAL_CATALOG, cacheCatalog, cloneCatalog, loadCatalog, saveCatalog } from '@/lib/catalog';
 import type { CatalogCategory, CatalogItem, CatalogSubcategory, PricingType } from '@/lib/catalog';
+
+type SettingsTab = 'menu' | 'payment';
 
 type ModalState =
   | { kind: 'category'; category?: CatalogCategory }
@@ -251,6 +253,8 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const [quoteToPrint, setQuoteToPrint] = useState<Quote | null>(null);
   const [reportToPrint, setReportToPrint] = useState<{ title: string; quotes: Quote[] } | null>(null);
   const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('menu');
   const queryClient = useQueryClient();
   const catalogQuery = useGetCatalog();
   const quotesQuery = useListQuotes({ limit: 1000 });
@@ -288,6 +292,26 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
     const active = catalog.reduce((sum, category) => sum + category.subcategories.reduce((inner, subcategory) => inner + subcategory.items.filter((item) => item.active).length, 0), 0);
     return { categories: catalog.length, subcategories, services, active };
   }, [catalog]);
+
+  // Anything in the app can ask for the Settings panel (for example "Change payment account" on a bill).
+  useEffect(() => {
+    const open = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: SettingsTab }>).detail?.tab;
+      setSettingsTab(tab === 'payment' ? 'payment' : 'menu');
+      setSettingsOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, open);
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !modal) setSettingsOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', onKey); };
+  }, [settingsOpen, modal]);
 
   useEffect(() => {
     const refresh = () => setCatalog(loadCatalog());
@@ -411,16 +435,15 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
          </Link>
          <div className="flex items-center gap-3">
             <span className="brand-header__badge hidden sm:inline-flex"><Sparkles size={12} /> Private workspace</span>
+            <button type="button" onClick={() => { setSettingsTab('menu'); setSettingsOpen(true); }} className="admin-secondary flex items-center gap-2" data-testid="button-open-settings"><Settings size={15} /> Settings</button>
             <button type="button" onClick={() => void onSignOut()} className="admin-secondary hidden items-center gap-2 sm:flex" data-testid="button-admin-sign-out">Sign out</button>
           <Link href="/111" className="admin-secondary hidden items-center gap-2 sm:flex" data-testid="link-view-estimator"><ArrowLeft size={15} /> Customer estimator</Link>
          </div>
       </div>
     </header>
     <div className="mx-auto max-w-[1440px] px-4 py-7 sm:px-8 sm:py-10 lg:px-12">
-        <div className="admin-intro flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-[#9a5b47]">Catalog management</p><div className="admin-hero-badge"><Sparkles size={12} /> Curated venue operations</div><h1 className="mt-3 max-w-2xl font-serif text-4xl font-semibold leading-tight tracking-[-0.025em] text-[#263b31] sm:text-5xl">Keep every celebration detail ready.</h1><p className="mt-4 max-w-xl text-sm leading-7 text-[#737269]">Update the services and prices your team offers. Changes sync to Supabase and appear in the estimator for future visitors.</p></div><div className="flex flex-wrap items-center gap-2"><span className="saved-pill" data-testid="status-catalog-saved"><Check size={14} /> {updateCatalogMutation.isPending ? 'Saving…' : updateCatalogMutation.isSuccess ? 'Saved to cloud' : 'Saved locally'} · {savedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{updateCatalogMutation.isError && <span className="rounded-lg border border-[#e8cfc5] bg-[#fff7f3] px-3 py-2 text-xs text-[#73483b]" role="alert">Cloud save failed, so other devices will not see this change. Please sign out, sign in again and retry.</span>}<button type="button" onClick={() => setModal({ kind: 'restore' })} className="admin-secondary" data-testid="button-open-restore"><RotateCcw size={15} /> Restore original</button><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-category"><Plus size={16} /> Add category</button></div></div>
-       <div className="mt-8 grid gap-3 sm:grid-cols-4"><div className="stat-card"><LayoutGrid size={18} /><span>Categories</span><strong data-testid="text-category-count">{stats.categories}</strong></div><div className="stat-card"><Boxes size={18} /><span>Subcategories</span><strong data-testid="text-subcategory-count">{stats.subcategories}</strong></div><div className="stat-card"><ListChecks size={18} /><span>Services</span><strong data-testid="text-service-count">{stats.services}</strong></div><div className="stat-card"><Check size={18} /><span>Customer-ready</span><strong data-testid="text-active-service-count">{stats.active}</strong></div></div>
+        <div className="admin-intro flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-[#9a5b47]">Operations desk</p><div className="admin-hero-badge"><Sparkles size={12} /> Curated venue operations</div><h1 className="mt-3 max-w-2xl font-serif text-4xl font-semibold leading-tight tracking-[-0.025em] text-[#263b31] sm:text-5xl">Bookings &amp; saved estimates.</h1><p className="mt-4 max-w-xl text-sm leading-7 text-[#737269]">See which dates are booked and follow up on every saved estimate. The menu, categories and payment account are managed under Settings.</p></div></div>
         <OccupancyCalendar quotes={allQuotes} onOpenQuote={openQuote} />
-        <PaymentSettingsSection />
         <section className="admin-panel mt-8 rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] p-4 shadow-[0_14px_40px_rgba(98,67,36,.035)] sm:p-5" data-testid="section-recent-estimates">
          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#eee6d9] pb-4">
              <div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9a5b47]">Customer pipeline</p><h2 className="mt-2 font-serif text-2xl font-semibold text-[#263b31]">Saved estimates</h2><p className="mt-1 text-sm text-[#7a776e]">Saved bills remain here until you manually delete them.</p></div>
@@ -503,8 +526,34 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
             <PaymentPanel key={selectedQuoteQuery.data.reference} quote={selectedQuoteQuery.data} />
           </div>}
         </section>}
-       <div className="mt-8 space-y-4">{catalog.length === 0 ? <div className="empty-panel" data-testid="empty-catalog"><CircleAlert size={24} /><h2>Nothing in the catalog yet</h2><p>Start with a category to give customers something to choose from.</p><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-first-category"><Plus size={16} /> Add first category</button></div> : catalog.map((category, categoryIndex) => <CategoryRow key={category.id} category={category} canMoveUp={categoryIndex > 0} canMoveDown={categoryIndex < catalog.length - 1} onMoveUp={() => moveCategory(category.id, -1)} onMoveDown={() => moveCategory(category.id, 1)} open={expanded[category.id] ?? true} onToggle={() => setExpanded((current) => ({ ...current, [category.id]: !(current[category.id] ?? true) }))} onEdit={() => setModal({ kind: 'category', category })} onDelete={() => deleteCategory(category)} onAddSubcategory={() => setModal({ kind: 'subcategory', categoryId: category.id })} onEditSubcategory={(subcategory) => setModal({ kind: 'subcategory', categoryId: category.id, subcategory })} onDeleteSubcategory={(subcategory) => deleteSubcategory(category.id, subcategory)} onAddService={(subcategory) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id })} onEditService={(subcategory, service) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id, service })} onToggleService={(subcategory, service) => updateCategory(category.id, (entry) => ({ ...entry, subcategories: entry.subcategories.map((group) => group.id === subcategory.id ? { ...group, items: group.items.map((item) => item.id === service.id ? { ...item, active: !item.active } : item) } : group) }))} onDeleteService={deleteService} />)}</div>
     </div>
+    {settingsOpen && <div className="fixed inset-0 z-40 flex justify-end bg-[#1d2e25]/45 backdrop-blur-[2px]" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }} data-testid="overlay-settings">
+      <aside className="flex h-full w-full max-w-4xl flex-col bg-[#fffdf8] shadow-2xl" role="dialog" aria-modal="true" aria-label="Settings" data-testid="panel-settings">
+        <div className="flex items-start justify-between gap-4 border-b border-[#eee6d9] px-4 py-4 sm:px-8 sm:py-5">
+          <div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#9a5b47]">Operations desk</p><h2 className="mt-1.5 font-serif text-2xl font-semibold text-[#263b31]">Settings</h2></div>
+          <div className="flex items-center gap-2"><button type="button" onClick={() => void onSignOut()} className="admin-secondary sm:hidden" data-testid="button-settings-sign-out">Sign out</button><button type="button" onClick={() => setSettingsOpen(false)} aria-label="Close settings" data-testid="button-close-settings" className="grid size-9 place-items-center rounded-full text-[#706e67] hover:bg-[#f2e8d3]"><X size={18} /></button></div>
+        </div>
+        <div className="flex gap-2 overflow-x-auto border-b border-[#eee6d9] px-4 py-3 sm:px-8" role="tablist" data-testid="tabs-settings">
+          {([['menu', 'Menu & catalog', LayoutGrid], ['payment', 'Payment account', Landmark]] as const).map(([key, label, Icon]) => (
+            <button key={key} type="button" role="tab" aria-selected={settingsTab === key} onClick={() => setSettingsTab(key)} className={`flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-xs font-bold transition ${settingsTab === key ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#5f655e] hover:border-[#864936]'}`} data-testid={`tab-settings-${key}`}><Icon size={14} /> {label}</button>
+          ))}
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-7">
+          {settingsTab === 'payment' ? (
+            <PaymentSettingsSection />
+          ) : (
+            <div data-testid="settings-menu-editor">
+              <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
+                <div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9a5b47]">Menu editor</p><h3 className="mt-2 font-serif text-2xl font-semibold text-[#263b31]">Menu &amp; catalog</h3><p className="mt-1 max-w-xl text-sm leading-6 text-[#7a776e]">Add categories, groups and services, set prices and choose what customers can see. Changes sync to Supabase and appear in the estimator for future visitors.</p></div>
+                <div className="flex flex-wrap items-center gap-2"><span className="saved-pill" data-testid="status-catalog-saved"><Check size={14} /> {updateCatalogMutation.isPending ? 'Saving…' : updateCatalogMutation.isSuccess ? 'Saved to cloud' : 'Saved locally'} · {savedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{updateCatalogMutation.isError && <span className="rounded-lg border border-[#e8cfc5] bg-[#fff7f3] px-3 py-2 text-xs text-[#73483b]" role="alert">Cloud save failed, so other devices will not see this change. Please sign out, sign in again and retry.</span>}<button type="button" onClick={() => setModal({ kind: 'restore' })} className="admin-secondary" data-testid="button-open-restore"><RotateCcw size={15} /> Restore original</button><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-category"><Plus size={16} /> Add category</button></div>
+              </div>
+              <div className="mt-8 grid gap-3 sm:grid-cols-4"><div className="stat-card"><LayoutGrid size={18} /><span>Categories</span><strong data-testid="text-category-count">{stats.categories}</strong></div><div className="stat-card"><Boxes size={18} /><span>Subcategories</span><strong data-testid="text-subcategory-count">{stats.subcategories}</strong></div><div className="stat-card"><ListChecks size={18} /><span>Services</span><strong data-testid="text-service-count">{stats.services}</strong></div><div className="stat-card"><Check size={18} /><span>Customer-ready</span><strong data-testid="text-active-service-count">{stats.active}</strong></div></div>
+              <div className="mt-8 space-y-4">{catalog.length === 0 ? <div className="empty-panel" data-testid="empty-catalog"><CircleAlert size={24} /><h2>Nothing in the catalog yet</h2><p>Start with a category to give customers something to choose from.</p><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-first-category"><Plus size={16} /> Add first category</button></div> : catalog.map((category, categoryIndex) => <CategoryRow key={category.id} category={category} canMoveUp={categoryIndex > 0} canMoveDown={categoryIndex < catalog.length - 1} onMoveUp={() => moveCategory(category.id, -1)} onMoveDown={() => moveCategory(category.id, 1)} open={expanded[category.id] ?? true} onToggle={() => setExpanded((current) => ({ ...current, [category.id]: !(current[category.id] ?? true) }))} onEdit={() => setModal({ kind: 'category', category })} onDelete={() => deleteCategory(category)} onAddSubcategory={() => setModal({ kind: 'subcategory', categoryId: category.id })} onEditSubcategory={(subcategory) => setModal({ kind: 'subcategory', categoryId: category.id, subcategory })} onDeleteSubcategory={(subcategory) => deleteSubcategory(category.id, subcategory)} onAddService={(subcategory) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id })} onEditService={(subcategory, service) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id, service })} onToggleService={(subcategory, service) => updateCategory(category.id, (entry) => ({ ...entry, subcategories: entry.subcategories.map((group) => group.id === subcategory.id ? { ...group, items: group.items.map((item) => item.id === service.id ? { ...item, active: !item.active } : item) } : group) }))} onDeleteService={deleteService} />)}</div>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>}
     {modal?.kind === 'category' && <CategoryModal state={modal} onClose={() => setModal(null)} onSave={handleCategorySave} />}
     {modal?.kind === 'subcategory' && <SubcategoryModal state={modal} onClose={() => setModal(null)} onSave={handleSubcategorySave} />}
     {modal?.kind === 'service' && <ServiceModal state={modal} onClose={() => setModal(null)} onSave={handleServiceSave} />}
