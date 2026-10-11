@@ -6,6 +6,7 @@ import {
   getListQuotesQueryKey,
   quotePaymentState,
   useUpdateQuotePricing,
+  type PaymentKind,
   type PaymentMethod,
   type PaymentState,
   type Quote,
@@ -16,6 +17,7 @@ import { qrPngBlob } from '@/lib/qr-image';
 import { UpiQr } from '@/components/upi-qr';
 import { openPaymentSettings, usePaymentSettings } from '@/components/payment-settings';
 
+const ADVANCE_PERCENT = 25;
 const money = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
 const dateTime = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -52,22 +54,23 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
   const loggedTotal = payments.reduce((sum, payment) => sum + payment.amount, 0);
   const earlierAdvance = Math.max(0, received - loggedTotal); // advance typed on the bill itself (not collected here)
 
+  const [kind, setKind] = useState<PaymentKind>(balance > 0 && received === 0 ? 'advance' : 'full');
   const [method, setMethod] = useState<PaymentMethod>('upi');
-  // The amount is always the whole remaining balance. Advances are noted on the bill itself (booking form).
-  const [amount, setAmount] = useState(String(balance));
+  const suggested = kind === 'full' ? balance : Math.min(balance, Math.max(1, Math.round((pricing.grandTotal * ADVANCE_PERCENT) / 100)));
+  const [amount, setAmount] = useState(String(suggested));
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const { settings } = usePaymentSettings();
   const [copied, setCopied] = useState('');
   const [qrBlob, setQrBlob] = useState<Blob | null>(null);
   const [shareNote, setShareNote] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
 
-  // Amount is filled in automatically from the bill: whatever balance is left.
-  useEffect(() => { setAmount(String(balance)); }, [balance]);
+  // Amount is filled in automatically from the bill: full payment = whatever balance is left.
+  useEffect(() => { setAmount(String(suggested)); }, [suggested]);
 
   const typed = Math.round(Math.max(0, Number(amount) || 0) * 100) / 100;
   const applied = Math.min(typed, balance);
   const upiReady = isValidUpiId(settings.upiId);
-  const upiUri = upiReady && applied > 0 ? buildUpiUri(settings, applied, `Payment ${quote.reference}`) : '';
+  const upiUri = upiReady && applied > 0 ? buildUpiUri(settings, applied, quote.customer.eventType?.trim() || 'Booking') : '';
   const progress = pricing.grandTotal > 0 ? Math.min(100, Math.round((received / pricing.grandTotal) * 100)) : 0;
   const bankText = bankDetailsText(settings);
 
@@ -81,7 +84,7 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
   const record = (via: PaymentMethod) => {
     if (applied <= 0) { setMessage({ kind: 'error', text: 'Enter an amount greater than zero.' }); return; }
     setMessage(null);
-    const entry: QuotePayment = { id: newPaymentId(), amount: applied, method: via, kind: 'full', paidAt: new Date().toISOString() };
+    const entry: QuotePayment = { id: newPaymentId(), amount: applied, method: via, kind: applied >= balance ? 'full' : kind, paidAt: new Date().toISOString() };
     const nextReceived = Math.min(pricing.grandTotal, received + applied);
     mutation.mutate({
       reference: quote.reference,
@@ -108,7 +111,7 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
 
   const eventName = quote.customer.eventType?.trim();
   const requestText = [
-    `Hello ${quote.customer.name}, this is ${settings.payeeName}. Please pay ${money(applied)} (full payment) for your ${eventName ? `${eventName} ` : ''}booking.`,
+    `Hello ${quote.customer.name}, this is ${settings.payeeName}. Please pay ${money(applied)} (${kind === 'full' || applied >= balance ? 'full payment' : 'advance payment'}) for your ${eventName ? `${eventName} ` : ''}booking.`,
     '',
     `UPI ID: ${settings.upiId}`,
     `Payee: ${settings.payeeName}`,
@@ -209,11 +212,15 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
       ) : (
         <div className="mt-4 space-y-3 border-t border-[#eee6d9] pt-4" data-testid="form-collect-payment">
           <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#9a5b47]">Collect payment</p>
+          <Segmented name="payment-kind" value={kind} onChange={setKind} options={[
+            { id: 'advance', label: 'Advance', note: `Suggested ${ADVANCE_PERCENT}% of the bill` },
+            { id: 'full', label: 'Full payment', note: 'Whole remaining balance' },
+          ]} />
           <label className="block">
-            <span className="mb-1 block text-xs font-bold text-[#263b31]">Amount to collect (filled from the balance)</span>
+            <span className="mb-1 block text-xs font-bold text-[#263b31]">Amount to collect {kind === 'full' ? '(filled from the balance)' : '(you can change it)'}</span>
             <div className="relative max-w-xs">
               <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-bold text-[#9a5b47]">₹</span>
-              <input type="number" min="1" max={balance} step="1" value={amount} readOnly onChange={(e) => setAmount(e.target.value)} className="field-control h-11 w-full rounded-xl pl-7 pr-3 text-sm font-semibold read-only:bg-[#f6efe2]" aria-label="Amount to collect in rupees" data-testid="input-collect-amount" />
+              <input type="number" min="1" max={balance} step="1" value={amount} readOnly={kind === 'full'} onChange={(e) => setAmount(e.target.value)} className="field-control h-11 w-full rounded-xl pl-7 pr-3 text-sm font-semibold read-only:bg-[#f6efe2]" aria-label="Amount to collect in rupees" data-testid="input-collect-amount" />
             </div>
                       </label>
           <Segmented name="payment-method" value={method} onChange={setMethod} options={[

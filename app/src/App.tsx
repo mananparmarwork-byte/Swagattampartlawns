@@ -473,53 +473,6 @@ function DiscountBlock({
   );
 }
 
-function AdvanceBlock({
-  advancePaid,
-  advanceAmount,
-  grandTotal,
-  onPaidChange,
-  onAmountChange,
-}: {
-  advancePaid: boolean;
-  advanceAmount: string;
-  grandTotal: number;
-  onPaidChange: (paid: boolean) => void;
-  onAmountChange: (value: string) => void;
-}) {
-  const typed = Math.max(0, Number(advanceAmount) || 0);
-  const advance = quoteAdvance({ grandTotal, advancePaid, advanceAmount: typed });
-  return (
-    <section className="selection-card page-enter rounded-2xl border border-[#e4dacc] p-4 sm:p-6" data-testid="block-advance">
-      <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#9a5b47]">Payment</p>
-      <h2 className="mt-2 font-serif text-2xl font-semibold text-[#263b31]">Advance payment</h2>
-      <p className="mt-1 text-sm text-[#74736c]">Choose whether the customer has paid an advance. The advance is deducted from the grand total and the balance left to pay is shown on the bill.</p>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Advance payment status">
-        {[{ paid: false, title: 'Not paid', note: 'No advance received yet' }, { paid: true, title: 'Advance paid', note: 'Enter the advance amount' }].map((option) => (
-          <label key={option.title} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${advancePaid === option.paid ? 'border-[#864936] bg-[#fbeee6]' : 'border-[#e4dacc] bg-[#fffdf8] hover:border-[#c9a98f]'}`}>
-            <input type="radio" name="advance-status" checked={advancePaid === option.paid} onChange={() => onPaidChange(option.paid)} className="size-5 accent-[#864936]" data-testid={option.paid ? 'input-advance-paid' : 'input-advance-not-paid'} />
-            <span><strong className="block text-sm text-[#263b31]">{option.title}</strong><span className="block text-xs text-[#74736c]">{option.note}</span></span>
-          </label>
-        ))}
-      </div>
-      {advancePaid && (
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <Field label="Advance amount" hint="Amount received in rupees" error={typed > grandTotal && grandTotal > 0 ? 'Advance is more than the grand total; it is limited to the grand total.' : undefined}>
-            <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-bold text-[#9a5b47]">₹</span>
-              <input type="number" min="0" step="1" value={advanceAmount} onChange={(e) => onAmountChange(e.target.value)} placeholder="0" className="field-control h-12 w-full rounded-xl pl-8 pr-3 text-sm" data-testid="input-advance-amount" aria-label="Advance amount in rupees" />
-            </div>
-          </Field>
-          <div className="flex flex-col justify-center rounded-xl bg-[#f6efe2] px-4 py-3 text-xs font-semibold text-[#5f655e]" data-testid="text-advance-preview">
-            <span className="flex justify-between gap-3">Grand total <span className="font-mono">{currency(grandTotal)}</span></span>
-            <span className="mt-1 flex justify-between gap-3">Advance paid <span className="font-mono text-[#3c7a52]">− {currency(advance.amount)}</span></span>
-            <span className="mt-1 flex justify-between gap-3 border-t border-[#dccfbb] pt-1 text-sm text-[#864936]">Balance to pay <span className="font-mono">{currency(advance.balance)}</span></span>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
 function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange }: { value: string; error?: string; slots: EventSlots; booked: Record<string, SlotId[]>; onChange: (value: string) => void; onSlotsChange: (slots: EventSlots) => void }) {
   const dates = parseEventDates(value);
   const todayISO = localISODate(new Date());
@@ -1427,7 +1380,6 @@ function EstimatorPage() {
                 </div>
               )}
               <EventDetails billNumberLocked={isEditing} eventSlots={eventSlots} bookedSlots={bookedSlots} onEventSlotsChange={setEventSlots} details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
-              <AdvanceBlock advancePaid={advancePaid} advanceAmount={advanceAmount} grandTotal={grandTotal} onPaidChange={(paid) => { setAdvancePaid(paid); if (!paid) setAdvanceAmount(''); }} onAmountChange={setAdvanceAmount} />
               <DiscountBlock enabled={discountEnabled} percent={discountPercent} flat={discountFlat} discountAmount={discountAmount} onEnabledChange={setDiscountEnabled} onPercentChange={setDiscountPercent} onFlatChange={setDiscountFlat} />
                <section className="page-enter stagger-1">
                 <div className="mb-5 flex items-end justify-between gap-4 px-1">
