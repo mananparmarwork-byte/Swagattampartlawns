@@ -16,14 +16,16 @@ import {
   formatEventDates,
   quoteEventDates,
   useSetQuoteBooked,
-  useSetQuoteAdvance,
   quoteAdvance,
+  quotePaymentState,
 } from '@/lib/supabase-queries';
 import { findConflicts, hasAnySlots, scheduleLines, slotText } from '@/lib/booking';
 import { OccupancyCalendar } from '@/components/occupancy-calendar';
+import { PaymentBadge, PaymentPanel } from '@/components/payment-panel';
+import { PaymentSettingsSection } from '@/components/payment-settings';
 import type { Quote } from '@/lib/supabase-queries';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { ArrowDown, ArrowLeft, ArrowUp, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, FileText, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, BadgeCheck, Banknote, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, FileText, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { Link } from 'wouter';
 import { CATALOG_UPDATED_EVENT, ORIGINAL_CATALOG, cacheCatalog, cloneCatalog, loadCatalog, saveCatalog } from '@/lib/catalog';
 import type { CatalogCategory, CatalogItem, CatalogSubcategory, PricingType } from '@/lib/catalog';
@@ -112,7 +114,7 @@ function SavedQuotePrintSheet({ quote }: { quote: Quote | null }) {
         {quote.pricing.gstEnabled && <div className="print-total-row"><span>GST ({quote.pricing.gstRate}%)</span><strong>{money(quote.pricing.gstAmount)}</strong></div>}
         <div className="print-total-row print-grand"><span>Grand total</span><strong>{money(quote.pricing.grandTotal)}</strong></div>
         {quoteAdvance(quote.pricing).paid && <div className="print-total-row"><span>Advance paid</span><strong>− {money(quoteAdvance(quote.pricing).amount)}</strong></div>}
-        {quoteAdvance(quote.pricing).paid && <div className="print-total-row print-balance"><span>Balance to pay</span><strong>{money(quoteAdvance(quote.pricing).balance)}</strong></div>}
+        {quoteAdvance(quote.pricing).paid && <div className="print-total-row print-balance"><span>{quoteAdvance(quote.pricing).balance <= 0 ? 'Fully paid' : 'Balance to pay'}</span><strong>{money(quoteAdvance(quote.pricing).balance)}</strong></div>}
         {quote.pricing.showCostPerGuest !== false && <div className="print-total-row"><span>Cost per guest</span><strong>{money(quote.pricing.costPerGuest)}</strong></div>}
       </div>
       <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
@@ -174,42 +176,6 @@ function EnquiryReportSheet({ report }: { report: { title: string; quotes: Quote
       <div className="print-totals"><div className="print-total-row print-grand"><span>All enquiries · total budget</span><strong>{money(totalBudget)}</strong></div></div>
       <div className="print-notes">Total budget is the grand total of each saved estimate. Price / plate is the food price per guest.</div>
     </main>
-  );
-}
-
-// Lets the admin add / change / remove the advance payment on a saved bill without opening the full editor.
-function AdvanceEditor({ quote }: { quote: Quote }) {
-  const queryClient = useQueryClient();
-  const saved = quoteAdvance(quote.pricing);
-  const [paid, setPaid] = useState(saved.paid);
-  const [amount, setAmount] = useState(saved.paid ? String(saved.amount) : '');
-  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
-  const mutation = useSetQuoteAdvance();
-  const typed = Math.max(0, Number(amount) || 0);
-  const preview = quoteAdvance({ grandTotal: quote.pricing.grandTotal, advancePaid: paid, advanceAmount: typed });
-  const save = () => {
-    setMessage(null);
-    mutation.mutate({ reference: quote.reference, pricing: quote.pricing, advancePaid: paid, advanceAmount: typed }, {
-      onSuccess: () => {
-        setMessage({ kind: 'ok', text: paid && preview.amount > 0 ? 'Advance saved.' : 'Marked as not paid.' });
-        void queryClient.invalidateQueries({ queryKey: getGetQuoteQueryKey(quote.reference) });
-        void queryClient.invalidateQueries({ queryKey: getListQuotesQueryKey() });
-      },
-      onError: (error) => setMessage({ kind: 'error', text: error.message }),
-    });
-  };
-  return (
-    <div className="rounded-xl border border-[#e3d8c9] bg-[#fffdf8] p-3 sm:p-4" data-testid="box-advance-editor">
-      <h3 className="font-serif text-lg font-semibold text-[#263b31]">Advance payment</h3>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <label className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${!paid ? 'border-[#864936] bg-[#fbeee6] text-[#864936]' : 'border-[#e0d3c1] bg-white text-[#5f655e]'}`}><input type="radio" name={`advance-${quote.reference}`} checked={!paid} onChange={() => { setPaid(false); setAmount(''); }} className="size-4 accent-[#864936]" data-testid="input-admin-advance-not-paid" />Not paid</label>
-        <label className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${paid ? 'border-[#864936] bg-[#fbeee6] text-[#864936]' : 'border-[#e0d3c1] bg-white text-[#5f655e]'}`}><input type="radio" name={`advance-${quote.reference}`} checked={paid} onChange={() => setPaid(true)} className="size-4 accent-[#864936]" data-testid="input-admin-advance-paid" />Advance paid</label>
-        {paid && <div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-bold text-[#9a5b47]">₹</span><input type="number" min="0" step="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Advance amount" className="field-control h-10 w-44 rounded-lg pl-7 pr-3 text-sm" aria-label="Advance amount in rupees" data-testid="input-admin-advance-amount" /></div>}
-        <button type="button" onClick={save} disabled={mutation.isPending} className="admin-primary" data-testid="button-save-advance"><Save size={14} /> {mutation.isPending ? 'Saving…' : 'Save advance'}</button>
-      </div>
-      <p className="mt-3 text-xs text-[#5f655e]">Grand total <strong className="font-mono">{money(quote.pricing.grandTotal)}</strong> · Advance <strong className="font-mono text-[#3c7a52]">− {money(preview.amount)}</strong> · Balance to pay <strong className="font-mono text-[#864936]">{money(preview.balance)}</strong></p>
-      {message && <p className={`mt-2 rounded-lg px-3 py-2 text-xs ${message.kind === 'ok' ? 'bg-[#e8f3ea] text-[#2f6b44]' : 'bg-[#fff7f3] text-[#73483b]'}`} role={message.kind === 'ok' ? 'status' : 'alert'}>{message.text}</p>}
-    </div>
   );
 }
 
@@ -290,7 +256,7 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const quotesQuery = useListQuotes({ limit: 1000 });
   const deleteQuoteMutation = useDeleteQuote();
   const setBookedMutation = useSetQuoteBooked();
-  const [bookingFilter, setBookingFilter] = useState<'all' | 'booked' | 'open'>('all');
+  const [bookingFilter, setBookingFilter] = useState<'all' | 'booked' | 'open' | 'paid' | 'due'>('all');
   const updateCatalogMutation = useUpdateCatalog();
   const selectedQuoteQuery = useGetQuote(selectedQuoteReference ?? '', {
     query: {
@@ -300,7 +266,20 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
   });
   const allQuotes = quotesQuery.data ?? [];
   const bookedCount = allQuotes.filter((quote) => quote.status === 'confirmed').length;
-  const filteredQuotes = allQuotes.filter((quote) => bookingFilter === 'all' || (bookingFilter === 'booked' ? quote.status === 'confirmed' : quote.status !== 'confirmed'));
+  const paidCount = allQuotes.filter((quote) => quotePaymentState(quote.pricing).state === 'paid').length;
+  const filteredQuotes = allQuotes.filter((quote) => {
+    if (bookingFilter === 'all') return true;
+    if (bookingFilter === 'booked') return quote.status === 'confirmed';
+    if (bookingFilter === 'open') return quote.status !== 'confirmed';
+    const paymentState = quotePaymentState(quote.pricing).state;
+    return bookingFilter === 'paid' ? paymentState === 'paid' : paymentState !== 'paid';
+  });
+  const paymentTotals = useMemo(() => allQuotes.reduce((totals, quote) => {
+    const payment = quotePaymentState(quote.pricing);
+    totals.collected += payment.received;
+    if (quote.status === 'confirmed') totals.pending += payment.balance;
+    return totals;
+  }, { collected: 0, pending: 0 }), [allQuotes]);
   const monthGroups = useMemo(() => groupQuotesByMonth(filteredQuotes), [filteredQuotes]);
   const currentMonthKey = monthKeyOf(new Date().toISOString());
   const stats = useMemo(() => {
@@ -414,7 +393,7 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
 
   const renderQuoteRow = (quote: Quote) => <div key={quote.id} className="flex w-full flex-col items-start gap-3 py-4 text-left transition hover:bg-[#fcf8f0] sm:flex-row sm:items-center sm:justify-between sm:px-2" data-testid={`row-saved-quote-${quote.reference}`}>
                 <button type="button" onClick={() => setSelectedQuoteReference(quote.reference)} className="min-w-0 text-left" data-testid={`button-open-quote-${quote.reference}`}><span className="flex flex-wrap items-center gap-2"><strong className="text-sm text-[#2e4437]">{quote.customer.name}</strong><span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] ${quote.status === 'confirmed' ? 'bg-[#864936] text-white' : 'bg-[#eee6d9] text-[#7a776e]'}`} data-testid={`badge-booking-${quote.reference}`}>{quote.status === 'confirmed' ? 'Booked' : 'Not booked'}</span></span><span className="mt-1 block text-xs text-[#858178]">{quote.customer.eventType} · {quote.customer.guests.toLocaleString('en-IN')} guests · {quote.reference}</span><span className="mt-1 block text-xs font-semibold text-[#5f655e]" data-testid={`text-schedule-${quote.reference}`}>{hasAnySlots(quote.customer.eventSlots) ? scheduleLines(quoteEventDates(quote.customer), quote.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${slotText(quote.customer.eventSlots?.[line.date], false)}`).join(' · ') : `${formatEventDates(quoteEventDates(quote.customer))} · time not set`}</span></button>
-                <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end"><span className="text-left sm:text-right"><strong className="block font-mono text-sm text-[#864936]">{money(quote.pricing.grandTotal)}</strong>{quoteAdvance(quote.pricing).paid && <span className="mt-0.5 block text-[10px] font-semibold text-[#3c7a52]" data-testid={`text-balance-${quote.reference}`}>Advance {money(quoteAdvance(quote.pricing).amount)} · Balance {money(quoteAdvance(quote.pricing).balance)}</span>}<span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[#938b7f]">{new Date(quote.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></span><span className="flex items-center gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e0d3c1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f655e]"><input type="checkbox" checked={quote.status === 'confirmed'} disabled={setBookedMutation.isPending} onChange={(e) => void toggleBooked(quote, e.target.checked)} className="size-4 accent-[#864936]" data-testid={`input-booked-${quote.reference}`} />Booked</label><button type="button" onClick={() => printQuote(quote)} className="icon-button" aria-label={`Print bill ${quote.reference}`} data-testid={`button-print-quote-${quote.reference}`}><Printer size={16} /></button><button type="button" onClick={() => deleteQuote(quote)} className="icon-button danger-hover" aria-label={`Delete bill ${quote.reference}`} data-testid={`button-delete-quote-${quote.reference}`} disabled={deleteQuoteMutation.isPending}><Trash2 size={16} /></button></span></span>
+                <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end"><span className="text-left sm:text-right"><strong className="block font-mono text-sm text-[#864936]">{money(quote.pricing.grandTotal)}</strong><span className="mt-1 flex sm:justify-end"><PaymentBadge state={quotePaymentState(quote.pricing).state} balance={quotePaymentState(quote.pricing).balance} testId={`badge-payment-${quote.reference}`} /></span><span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[#938b7f]">{new Date(quote.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></span><span className="flex items-center gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e0d3c1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f655e]"><input type="checkbox" checked={quote.status === 'confirmed'} disabled={setBookedMutation.isPending} onChange={(e) => void toggleBooked(quote, e.target.checked)} className="size-4 accent-[#864936]" data-testid={`input-booked-${quote.reference}`} />Booked</label><button type="button" onClick={() => printQuote(quote)} className="icon-button" aria-label={`Print bill ${quote.reference}`} data-testid={`button-print-quote-${quote.reference}`}><Printer size={16} /></button><button type="button" onClick={() => deleteQuote(quote)} className="icon-button danger-hover" aria-label={`Delete bill ${quote.reference}`} data-testid={`button-delete-quote-${quote.reference}`} disabled={deleteQuoteMutation.isPending}><Trash2 size={16} /></button></span></span>
               </div>;
 
   return <>
@@ -441,14 +420,22 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
         <div className="admin-intro flex flex-col justify-between gap-6 lg:flex-row lg:items-end"><div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-[#9a5b47]">Catalog management</p><div className="admin-hero-badge"><Sparkles size={12} /> Curated venue operations</div><h1 className="mt-3 max-w-2xl font-serif text-4xl font-semibold leading-tight tracking-[-0.025em] text-[#263b31] sm:text-5xl">Keep every celebration detail ready.</h1><p className="mt-4 max-w-xl text-sm leading-7 text-[#737269]">Update the services and prices your team offers. Changes sync to Supabase and appear in the estimator for future visitors.</p></div><div className="flex flex-wrap items-center gap-2"><span className="saved-pill" data-testid="status-catalog-saved"><Check size={14} /> {updateCatalogMutation.isPending ? 'Saving…' : updateCatalogMutation.isSuccess ? 'Saved to cloud' : 'Saved locally'} · {savedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>{updateCatalogMutation.isError && <span className="rounded-lg border border-[#e8cfc5] bg-[#fff7f3] px-3 py-2 text-xs text-[#73483b]" role="alert">Cloud save failed, so other devices will not see this change. Please sign out, sign in again and retry.</span>}<button type="button" onClick={() => setModal({ kind: 'restore' })} className="admin-secondary" data-testid="button-open-restore"><RotateCcw size={15} /> Restore original</button><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-category"><Plus size={16} /> Add category</button></div></div>
        <div className="mt-8 grid gap-3 sm:grid-cols-4"><div className="stat-card"><LayoutGrid size={18} /><span>Categories</span><strong data-testid="text-category-count">{stats.categories}</strong></div><div className="stat-card"><Boxes size={18} /><span>Subcategories</span><strong data-testid="text-subcategory-count">{stats.subcategories}</strong></div><div className="stat-card"><ListChecks size={18} /><span>Services</span><strong data-testid="text-service-count">{stats.services}</strong></div><div className="stat-card"><Check size={18} /><span>Customer-ready</span><strong data-testid="text-active-service-count">{stats.active}</strong></div></div>
         <OccupancyCalendar quotes={allQuotes} onOpenQuote={openQuote} />
+        <PaymentSettingsSection />
         <section className="admin-panel mt-8 rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] p-4 shadow-[0_14px_40px_rgba(98,67,36,.035)] sm:p-5" data-testid="section-recent-estimates">
          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[#eee6d9] pb-4">
              <div><p className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9a5b47]">Customer pipeline</p><h2 className="mt-2 font-serif text-2xl font-semibold text-[#263b31]">Saved estimates</h2><p className="mt-1 text-sm text-[#7a776e]">Saved bills remain here until you manually delete them.</p></div>
            {quotesQuery.isFetching && <span className="text-xs text-[#8b887f]" role="status" data-testid="status-quotes-loading">Refreshing estimates…</span>}
          </div>
          {allQuotes.length > 0 && (
+           <div className="grid gap-3 pt-4 sm:grid-cols-3" data-testid="summary-payments">
+             <div className="rounded-xl border border-[#cfe6d6] bg-[#f1f8f3] px-4 py-3"><span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#3c7a52]"><BadgeCheck size={13} /> Collected</span><strong className="mt-1 block font-mono text-lg text-[#2f6b44]" data-testid="text-total-collected">{money(paymentTotals.collected)}</strong></div>
+             <div className="rounded-xl border border-[#f0d9c9] bg-[#fdf3ec] px-4 py-3"><span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#864936]"><Banknote size={13} /> Balance pending (booked)</span><strong className="mt-1 block font-mono text-lg text-[#864936]" data-testid="text-total-pending">{money(paymentTotals.pending)}</strong></div>
+             <div className="rounded-xl border border-[#e7e0d5] bg-white px-4 py-3"><span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#77736D]"><Check size={13} /> Fully paid bills</span><strong className="mt-1 block font-mono text-lg text-[#242424]" data-testid="text-paid-count">{paidCount} of {allQuotes.length}</strong></div>
+           </div>
+         )}
+         {allQuotes.length > 0 && (
            <div className="flex flex-wrap items-center gap-2 pt-4" role="tablist" data-testid="tabs-booking-filter">
-             {([['all', 'All', allQuotes.length], ['booked', 'Booked', bookedCount], ['open', 'Not booked', allQuotes.length - bookedCount]] as const).map(([key, label, count]) => (
+             {([['all', 'All', allQuotes.length], ['booked', 'Booked', bookedCount], ['open', 'Not booked', allQuotes.length - bookedCount], ['paid', 'Paid', paidCount], ['due', 'Payment due', allQuotes.length - paidCount]] as const).map(([key, label, count]) => (
                <button key={key} type="button" role="tab" aria-selected={bookingFilter === key} onClick={() => setBookingFilter(key)} className={`rounded-full border px-4 py-1.5 text-xs font-bold transition ${bookingFilter === key ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#5f655e] hover:border-[#864936]'}`} data-testid={`tab-filter-${key}`}>{label} · {count}</button>
              ))}
              <button type="button" onClick={() => printReport('All enquiries', allQuotes)} className="admin-primary ml-auto" data-testid="button-print-all-enquiries"><FileText size={15} /> Print all enquiries</button>
@@ -513,7 +500,7 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
               {quoteAdvance(selectedQuoteQuery.data.pricing).paid && <div className="flex justify-between gap-4 text-base font-semibold text-[#864936]"><span>Balance to pay</span><strong className="font-mono">{money(quoteAdvance(selectedQuoteQuery.data.pricing).balance)}</strong></div>}
               {selectedQuoteQuery.data.pricing.showCostPerGuest !== false && <div className="flex justify-between gap-4 text-xs text-[#7a776e]"><span>Cost per guest</span><strong className="font-mono">{money(selectedQuoteQuery.data.pricing.costPerGuest)}</strong></div>}
             </div>
-            <AdvanceEditor key={`${selectedQuoteQuery.data.reference}-${selectedQuoteQuery.dataUpdatedAt}`} quote={selectedQuoteQuery.data} />
+            <PaymentPanel key={selectedQuoteQuery.data.reference} quote={selectedQuoteQuery.data} />
           </div>}
         </section>}
        <div className="mt-8 space-y-4">{catalog.length === 0 ? <div className="empty-panel" data-testid="empty-catalog"><CircleAlert size={24} /><h2>Nothing in the catalog yet</h2><p>Start with a category to give customers something to choose from.</p><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-first-category"><Plus size={16} /> Add first category</button></div> : catalog.map((category, categoryIndex) => <CategoryRow key={category.id} category={category} canMoveUp={categoryIndex > 0} canMoveDown={categoryIndex < catalog.length - 1} onMoveUp={() => moveCategory(category.id, -1)} onMoveDown={() => moveCategory(category.id, 1)} open={expanded[category.id] ?? true} onToggle={() => setExpanded((current) => ({ ...current, [category.id]: !(current[category.id] ?? true) }))} onEdit={() => setModal({ kind: 'category', category })} onDelete={() => deleteCategory(category)} onAddSubcategory={() => setModal({ kind: 'subcategory', categoryId: category.id })} onEditSubcategory={(subcategory) => setModal({ kind: 'subcategory', categoryId: category.id, subcategory })} onDeleteSubcategory={(subcategory) => deleteSubcategory(category.id, subcategory)} onAddService={(subcategory) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id })} onEditService={(subcategory, service) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id, service })} onToggleService={(subcategory, service) => updateCategory(category.id, (entry) => ({ ...entry, subcategories: entry.subcategories.map((group) => group.id === subcategory.id ? { ...group, items: group.items.map((item) => item.id === service.id ? { ...item, active: !item.active } : item) } : group) }))} onDeleteService={deleteService} />)}</div>

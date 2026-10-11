@@ -5,6 +5,7 @@ import {
   type UseQueryOptions,
 } from '@tanstack/react-query';
 import type { CatalogCategory } from '@/lib/catalog';
+import { cleanPaymentSettings, type PaymentSettings } from '@/lib/payments';
 import { cloneCatalog, ORIGINAL_CATALOG } from '@/lib/catalog';
 import { isSupabaseConfigured, requireSupabase, supabase } from '@/lib/supabase';
 
@@ -32,6 +33,17 @@ export type QuoteCustomer = {
   hall: string;
 };
 
+export type PaymentMethod = 'upi' | 'cash';
+export type PaymentKind = 'advance' | 'full';
+export type QuotePayment = {
+  id: string;
+  amount: number;
+  method: PaymentMethod;
+  kind: PaymentKind;
+  paidAt: string;
+  note?: string;
+};
+
 export type QuotePricing = {
   foodPerPlate: number;
   subtotal: number;
@@ -53,6 +65,8 @@ export type QuotePricing = {
   advancePaid?: boolean;
   advanceAmount?: number;
   balanceDue?: number;
+  // Log of payments collected from the admin panel (UPI / cash). advanceAmount is the running total received.
+  payments?: QuotePayment[];
 };
 
 export type QuoteInput = {
@@ -106,6 +120,14 @@ export function quoteEventDates(customer: { eventDate: string; eventDates?: stri
 export function quoteAdvance(pricing: Pick<QuotePricing, 'grandTotal' | 'advancePaid' | 'advanceAmount'>): { paid: boolean; amount: number; balance: number } {
   const amount = pricing.advancePaid ? Math.min(pricing.grandTotal, Math.max(0, Number(pricing.advanceAmount) || 0)) : 0;
   return { paid: amount > 0, amount, balance: pricing.grandTotal - amount };
+}
+
+// unpaid = nothing received, partial = advance received, paid = nothing left to pay.
+export type PaymentState = 'unpaid' | 'partial' | 'paid';
+export function quotePaymentState(pricing: Pick<QuotePricing, 'grandTotal' | 'advancePaid' | 'advanceAmount'>): { state: PaymentState; received: number; balance: number } {
+  const advance = quoteAdvance(pricing);
+  if (!advance.paid) return { state: 'unpaid', received: 0, balance: pricing.grandTotal };
+  return { state: advance.balance <= 0 ? 'paid' : 'partial', received: advance.amount, balance: advance.balance };
 }
 
 export const getGetCatalogQueryKey = () => ['supabase', 'catalog'] as const;
@@ -232,6 +254,71 @@ export function useSetQuoteAdvance() {
         .select('reference');
       if (error) throw error;
       if (!data || data.length === 0) throw new Error(EDIT_PERMISSION_MESSAGE);
+    },
+  });
+}
+
+// Saves a new pricing block on a saved bill (used when a payment is recorded or removed). Needs supabase/04-edit-quotes.sql.
+export function useUpdateQuotePricing() {
+  return useMutation<void, Error, { reference: string; pricing: QuotePricing }>({
+    mutationFn: async ({ reference, pricing }) => {
+      const { data, error } = await requireSupabase()
+        .from('quotes')
+        .update({ pricing })
+        .eq('reference', reference)
+        .select('reference');
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(EDIT_PERMISSION_MESSAGE);
+    },
+  });
+}
+
+export const getGetPaymentSettingsQueryKey = () => ['supabase', 'payment-settings'] as const;
+
+// Reads the payment account details saved by the admin (UPI ID, bank details). Needs supabase/05-payment-settings.sql.
+// `available` is false when the table has not been created yet; the panel then falls back to this device's copy.
+export function useGetPaymentSettings() {
+  return useQuery<{ settings: PaymentSettings | null; available: boolean }>({
+    queryKey: getGetPaymentSettingsQueryKey(),
+    queryFn: async () => {
+      if (!isSupabaseConfigured) return { settings: null, available: false };
+      const { data, error } = await requireSupabase().from('payment_settings').select('*').eq('id', 'default').maybeSingle();
+      if (error) return { settings: null, available: false };
+      if (!data) return { settings: null, available: true };
+      return {
+        available: true,
+        settings: cleanPaymentSettings({
+          upiId: data.upi_id,
+          payeeName: data.payee_name,
+          bankName: data.bank_name,
+          accountHolder: data.account_holder,
+          accountNumber: data.account_number,
+          ifsc: data.ifsc,
+          branch: data.branch,
+        }),
+      };
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useSavePaymentSettings() {
+  return useMutation<void, Error, PaymentSettings>({
+    mutationFn: async (settings) => {
+      const { error } = await requireSupabase()
+        .from('payment_settings')
+        .upsert({
+          id: 'default',
+          upi_id: settings.upiId,
+          payee_name: settings.payeeName,
+          bank_name: settings.bankName,
+          account_holder: settings.accountHolder,
+          account_number: settings.accountNumber,
+          ifsc: settings.ifsc,
+          branch: settings.branch,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+      if (error) throw error;
     },
   });
 }

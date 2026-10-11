@@ -983,7 +983,7 @@ function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: Pr
         {gstEnabled && <div className="print-total-row"><span>GST ({gstRate}%)</span><strong>{currency(gstAmount)}</strong></div>}
         <div className="print-total-row print-grand"><span>Grand total</span><strong>{currency(grandTotal)}</strong></div>
         {advanceAmount > 0 && <div className="print-total-row"><span>Advance paid</span><strong>− {currency(advanceAmount)}</strong></div>}
-        {advanceAmount > 0 && <div className="print-total-row print-balance"><span>Balance to pay</span><strong>{currency(balanceDue)}</strong></div>}
+        {advanceAmount > 0 && <div className="print-total-row print-balance"><span>{balanceDue <= 0 ? 'Fully paid' : 'Balance to pay'}</span><strong>{currency(balanceDue)}</strong></div>}
         {showCostPerGuest && <div className="print-total-row"><span>Cost per guest</span><strong>{currency(costPerGuest)}</strong></div>}
       </div>
        <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
@@ -1234,7 +1234,7 @@ function EstimatorPage() {
       total: line.total,
       description: line.description,
     })),
-    pricing: { foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, showCostPerGuest, discountEnabled: discountAmount > 0, discountPercent: discountPercentValue, discountFlat: discountFlatValue, discountAmount, grandTotal, costPerGuest, advancePaid: advanceValue > 0, advanceAmount: advanceValue, balanceDue },
+    pricing: { foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, showCostPerGuest, discountEnabled: discountAmount > 0, discountPercent: discountPercentValue, discountFlat: discountFlatValue, discountAmount, grandTotal, costPerGuest, advancePaid: advanceValue > 0, advanceAmount: advanceValue, balanceDue, ...(editQuote?.pricing.payments ? { payments: editQuote.pricing.payments } : {}) },
   });
 
   const estimateMessage = () => {
