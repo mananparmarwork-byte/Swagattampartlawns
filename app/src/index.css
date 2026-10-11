@@ -734,6 +734,8 @@
   .print-grand { border-top: 2px solid #C86B45; margin-top: 4px; padding-top: 6px; font-size: 13px; font-weight: 700; }
   .print-notes { border-top: 1px solid #E7E0D5; margin-top: 10px; padding-top: 7px; color: #77736D; font-size: 7.5px; line-height: 1.35; }
 
+  .print-balance { border-top: 1px solid #864936; margin-top: 3px; padding-top: 4px; color: #864936; font-size: 1.1em; }
+
   /* Enquiry report (Print all enquiries / Print month): landscape A4 table */
   @page enquiry { size: A4 landscape; margin: 8mm 10mm; }
   .enquiry-report { page: enquiry; }

@@ -49,6 +49,10 @@ export type QuotePricing = {
   discountAmount?: number;
   grandTotal: number;
   costPerGuest: number;
+  // Advance payment: when advancePaid is true, advanceAmount is taken off the grand total and balanceDue is what is left to pay.
+  advancePaid?: boolean;
+  advanceAmount?: number;
+  balanceDue?: number;
 };
 
 export type QuoteInput = {
@@ -96,6 +100,12 @@ export function formatEventDates(dates: string[]): string {
 
 export function quoteEventDates(customer: { eventDate: string; eventDates?: string[] }): string[] {
   return customer.eventDates && customer.eventDates.length ? customer.eventDates : parseEventDates(customer.eventDate);
+}
+
+// Advance actually counted on a bill (never more than the grand total) and the balance still to be paid.
+export function quoteAdvance(pricing: Pick<QuotePricing, 'grandTotal' | 'advancePaid' | 'advanceAmount'>): { paid: boolean; amount: number; balance: number } {
+  const amount = pricing.advancePaid ? Math.min(pricing.grandTotal, Math.max(0, Number(pricing.advanceAmount) || 0)) : 0;
+  return { paid: amount > 0, amount, balance: pricing.grandTotal - amount };
 }
 
 export const getGetCatalogQueryKey = () => ['supabase', 'catalog'] as const;
@@ -179,6 +189,49 @@ export function useCreateQuote() {
         .single();
       if (error) throw error;
       return fromQuoteRow(data as QuoteRow);
+    },
+  });
+}
+
+const EDIT_PERMISSION_MESSAGE = 'Supabase did not allow this change. Run the file supabase/04-edit-quotes.sql once in the Supabase SQL Editor, then try again.';
+
+// Saves changes to an already saved bill (the bill number and the Booked status are not changed). Needs supabase/04-edit-quotes.sql.
+export function useUpdateQuote() {
+  return useMutation<void, Error, { reference: string; data: QuoteInput }>({
+    mutationFn: async ({ reference, data: input }) => {
+      const { data, error } = await requireSupabase()
+        .from('quotes')
+        .update({
+          customer_name: input.customer.name,
+          mobile: input.customer.mobile,
+          event_type: input.customer.eventType,
+          event_date: input.customer.eventDate,
+          guests: input.customer.guests,
+          customer_gst_number: input.customer.gstNumber ?? '',
+          hall: input.customer.hall,
+          services: input.services,
+          pricing: { ...input.pricing, eventDates: input.customer.eventDates ?? [input.customer.eventDate], eventSlots: input.customer.eventSlots ?? {} },
+        })
+        .eq('reference', reference)
+        .select('reference');
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(EDIT_PERMISSION_MESSAGE);
+    },
+  });
+}
+
+// Adds / changes / removes the advance payment on a saved bill without touching anything else. Needs supabase/04-edit-quotes.sql.
+export function useSetQuoteAdvance() {
+  return useMutation<void, Error, { reference: string; pricing: QuotePricing; advancePaid: boolean; advanceAmount: number }>({
+    mutationFn: async ({ reference, pricing, advancePaid, advanceAmount }) => {
+      const advance = quoteAdvance({ grandTotal: pricing.grandTotal, advancePaid, advanceAmount });
+      const { data, error } = await requireSupabase()
+        .from('quotes')
+        .update({ pricing: { ...pricing, advancePaid: advance.amount > 0, advanceAmount: advance.amount, balanceDue: advance.balance } })
+        .eq('reference', reference)
+        .select('reference');
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(EDIT_PERMISSION_MESSAGE);
     },
   });
 }

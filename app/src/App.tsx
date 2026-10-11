@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
+import { Link, Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   getGetCatalogQueryKey,
   getListQuotesQueryKey,
+  getGetQuoteQueryKey,
   useCreateQuote,
+  useUpdateQuote,
+  useGetQuote,
+  quoteAdvance,
   useGetCatalog,
   useBookedSlots,
   parseEventDates,
@@ -22,6 +26,7 @@ import {
   Clock3,
   IndianRupee,
   Minus,
+  Pencil,
   Plus,
   Printer,
   RotateCcw,
@@ -32,6 +37,7 @@ import {
 import { ErrorBoundary } from '@/components/error-boundary';
 import NotFound from '@/pages/not-found';
 import type { EstimatePayload } from '@/lib/estimate-connection';
+import type { Quote } from '@/lib/supabase-queries';
 import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
@@ -68,6 +74,8 @@ type PrintData = {
   showCostPerGuest: boolean;
   eventSlots: EventSlots;
   billNumber: string;
+  advanceAmount: number;
+  balanceDue: number;
 };
 type CopyStatus = 'idle' | 'copied' | 'error';
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -80,6 +88,11 @@ const displayEventDates = (value: string) => formatEventDates(parseEventDates(va
 const displayDate = (date: string) => (date ? new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not selected');
 const displayEventType = (details: Details) => details.eventType === 'Other' ? details.otherEventType.trim() || 'Other' : details.eventType;
 const BILL_NOTE = 'This is an auto-generated bill and does not require any signature or stamp. It is electronically generated and is valid without a physical signature or company stamp.';
+
+function advanceMessage(pricing: { grandTotal: number; advancePaid?: boolean; advanceAmount?: number }) {
+  const advance = quoteAdvance(pricing);
+  return advance.paid ? `\nAdvance paid: -${currency(advance.amount)}\nBalance to pay: ${currency(advance.balance)}` : '';
+}
 
 function discountLabelText(percent: number, flat: number) {
   const parts: string[] = [];
@@ -251,7 +264,9 @@ function EventDetails({
   onCustomerGstNumberChange,
   onGstNumberVisibilityChange,
   onCustomerGstNumberVisibilityChange,
+  billNumberLocked = false,
 }: {
+  billNumberLocked?: boolean;
   details: Details;
   errors: ValidationErrors;
   hallGstNumber: string;
@@ -314,9 +329,10 @@ function EventDetails({
            <input
              value={details.billNumber}
              onChange={(e) => onChange('billNumber', e.target.value.replace(/\D/g, '').slice(0, 12))}
+             disabled={billNumberLocked}
              inputMode="numeric"
              placeholder="e.g. 1001"
-             className="field-control h-12 w-full rounded-xl px-3 text-sm"
+             className="field-control h-12 w-full rounded-xl px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
              data-testid="input-bill-number"
              aria-label="Bill number"
            />
@@ -452,6 +468,53 @@ function DiscountBlock({
         <p className="mt-4 text-xs font-semibold text-[#5f655e]" data-testid="text-discount-preview">
           Total discount: <span className="font-mono text-[#864936]">− {currency(discountAmount)}</span>
         </p>
+      )}
+    </section>
+  );
+}
+
+function AdvanceBlock({
+  advancePaid,
+  advanceAmount,
+  grandTotal,
+  onPaidChange,
+  onAmountChange,
+}: {
+  advancePaid: boolean;
+  advanceAmount: string;
+  grandTotal: number;
+  onPaidChange: (paid: boolean) => void;
+  onAmountChange: (value: string) => void;
+}) {
+  const typed = Math.max(0, Number(advanceAmount) || 0);
+  const advance = quoteAdvance({ grandTotal, advancePaid, advanceAmount: typed });
+  return (
+    <section className="selection-card page-enter rounded-2xl border border-[#e4dacc] p-4 sm:p-6" data-testid="block-advance">
+      <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-[#9a5b47]">Payment</p>
+      <h2 className="mt-2 font-serif text-2xl font-semibold text-[#263b31]">Advance payment</h2>
+      <p className="mt-1 text-sm text-[#74736c]">Choose whether the customer has paid an advance. The advance is deducted from the grand total and the balance left to pay is shown on the bill.</p>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Advance payment status">
+        {[{ paid: false, title: 'Not paid', note: 'No advance received yet' }, { paid: true, title: 'Advance paid', note: 'Enter the advance amount' }].map((option) => (
+          <label key={option.title} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-3 transition ${advancePaid === option.paid ? 'border-[#864936] bg-[#fbeee6]' : 'border-[#e4dacc] bg-[#fffdf8] hover:border-[#c9a98f]'}`}>
+            <input type="radio" name="advance-status" checked={advancePaid === option.paid} onChange={() => onPaidChange(option.paid)} className="size-5 accent-[#864936]" data-testid={option.paid ? 'input-advance-paid' : 'input-advance-not-paid'} />
+            <span><strong className="block text-sm text-[#263b31]">{option.title}</strong><span className="block text-xs text-[#74736c]">{option.note}</span></span>
+          </label>
+        ))}
+      </div>
+      {advancePaid && (
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <Field label="Advance amount" hint="Amount received in rupees" error={typed > grandTotal && grandTotal > 0 ? 'Advance is more than the grand total; it is limited to the grand total.' : undefined}>
+            <div className="relative">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-bold text-[#9a5b47]">₹</span>
+              <input type="number" min="0" step="1" value={advanceAmount} onChange={(e) => onAmountChange(e.target.value)} placeholder="0" className="field-control h-12 w-full rounded-xl pl-8 pr-3 text-sm" data-testid="input-advance-amount" aria-label="Advance amount in rupees" />
+            </div>
+          </Field>
+          <div className="flex flex-col justify-center rounded-xl bg-[#f6efe2] px-4 py-3 text-xs font-semibold text-[#5f655e]" data-testid="text-advance-preview">
+            <span className="flex justify-between gap-3">Grand total <span className="font-mono">{currency(grandTotal)}</span></span>
+            <span className="mt-1 flex justify-between gap-3">Advance paid <span className="font-mono text-[#3c7a52]">− {currency(advance.amount)}</span></span>
+            <span className="mt-1 flex justify-between gap-3 border-t border-[#dccfbb] pt-1 text-sm text-[#864936]">Balance to pay <span className="font-mono">{currency(advance.balance)}</span></span>
+          </div>
+        </div>
       )}
     </section>
   );
@@ -625,6 +688,9 @@ function SummaryPanel({
   discountAmount,
   discountLabel,
   grandTotal,
+  advanceAmount,
+  balanceDue,
+  editing,
   costPerGuest,
   showCostPerGuest,
   onShowCostPerGuestChange,
@@ -638,6 +704,7 @@ function SummaryPanel({
   onReset,
   onSaveEstimate,
   saveStatus,
+  saveErrorMessage,
   savedEstimate,
 }: {
   catalog: Category[];
@@ -653,6 +720,9 @@ function SummaryPanel({
   discountAmount: number;
   discountLabel: string;
   grandTotal: number;
+  advanceAmount: number;
+  balanceDue: number;
+  editing: boolean;
   costPerGuest: number;
   showCostPerGuest: boolean;
   onShowCostPerGuestChange: (show: boolean) => void;
@@ -666,6 +736,7 @@ function SummaryPanel({
   onReset: () => void;
   onSaveEstimate: () => void;
   saveStatus: SaveStatus;
+  saveErrorMessage: string;
   savedEstimate: EstimatePayload | null;
 }) {
   return (
@@ -759,6 +830,12 @@ function SummaryPanel({
               <div><p className="text-xs uppercase tracking-[0.13em] text-[#c5c9bf]">Grand total</p><p className="mt-1 text-xs text-[#9fa99e]">Estimated for your event</p></div>
               <span className="font-mono text-2xl font-bold tracking-tight text-[#f1d58e]" data-testid="text-grand-total">{currency(grandTotal)}</span>
             </div>
+            {advanceAmount > 0 && (
+              <div className="mt-3 space-y-2 rounded-lg border border-[#c19a56]/40 px-3 py-3 text-sm" data-testid="summary-advance">
+                <div className="flex items-center justify-between text-[#9fe0b0]"><span>Advance paid</span><span className="font-mono text-xs" data-testid="text-advance-amount">− {currency(advanceAmount)}</span></div>
+                <div className="flex items-end justify-between"><span className="text-xs uppercase tracking-[0.13em] text-[#c5c9bf]">Balance to pay</span><span className="font-mono text-xl font-bold text-[#f1d58e]" data-testid="text-balance-due">{currency(balanceDue)}</span></div>
+              </div>
+            )}
             <div className="mt-3 flex items-center justify-between rounded-lg bg-white/8 px-3 py-2 text-xs"><label className="flex cursor-pointer items-center gap-2 text-[#b7c0b4]"><input type="checkbox" checked={showCostPerGuest} onChange={(e) => onShowCostPerGuestChange(e.target.checked)} className="size-4 accent-[#d6ae60]" data-testid="input-show-cost-per-guest" />Cost per guest</label><span className="font-mono font-bold text-[#f7f0e2]" data-testid="text-cost-per-guest">{showCostPerGuest ? currency(costPerGuest) : 'Hidden'}</span></div>
           </div>
         </div>
@@ -767,12 +844,13 @@ function SummaryPanel({
            <button type="button" onClick={onPrint} className="estimate-action-button estimate-action-button--primary" data-testid="button-print-estimate"><Printer size={16} /> Print estimate</button>
           <button type="button" onClick={onCopy} className="flex min-h-12 items-center justify-center gap-2 rounded-xl border border-white/20 px-3 text-sm font-semibold text-[#f7f0e2] transition hover:bg-white/10" data-testid="button-copy-estimate"><Copy size={16} /> {copyStatus === 'copied' ? 'Copied' : copyStatus === 'error' ? 'Copy failed' : 'Copy summary'}</button>
            <button type="button" onClick={onWhatsApp} className="estimate-action-button estimate-action-button--whatsapp" data-testid="button-send-whatsapp"><Send size={16} /> Send on WhatsApp</button>
-           <button type="button" onClick={onSaveEstimate} disabled={saveStatus === 'saving' || saveStatus === 'saved'} className="estimate-action-button estimate-action-button--primary disabled:cursor-not-allowed disabled:opacity-55" data-testid="button-save-estimate"><Check size={16} /> {saveStatus === 'saving' ? 'Saving estimate' : saveStatus === 'saved' ? 'Estimate saved' : 'Save estimate'}</button>
+           <button type="button" onClick={onSaveEstimate} disabled={saveStatus === 'saving' || (saveStatus === 'saved' && !editing)} className="estimate-action-button estimate-action-button--primary disabled:cursor-not-allowed disabled:opacity-55" data-testid="button-save-estimate"><Check size={16} /> {saveStatus === 'saving' ? (editing ? 'Saving changes' : 'Saving estimate') : saveStatus === 'saved' ? (editing ? 'Changes saved' : 'Estimate saved') : (editing ? 'Save changes' : 'Save estimate')}</button>
         </div>
-         {saveStatus === 'saved' && <p className="save-status save-status--success mt-3 rounded-lg px-3 py-2 text-center text-xs" role="status" data-testid="status-estimate-saved">Your estimate has been saved. Our team will follow up with you shortly.</p>}
-         {saveStatus === 'error' && <p className="save-status save-status--error mt-3 rounded-lg px-3 py-2 text-center text-xs" role="alert" data-testid="status-estimate-save-error">We could not save this estimate right now. You can still print, copy, or send it on WhatsApp.</p>}
+         {saveStatus === 'saved' && <p className="save-status save-status--success mt-3 rounded-lg px-3 py-2 text-center text-xs" role="status" data-testid="status-estimate-saved">{editing ? 'Changes saved to this bill. You can go back to the admin panel.' : 'Your estimate has been saved. Our team will follow up with you shortly.'}</p>}
+         {saveStatus === 'error' && <p className="save-status save-status--error mt-3 rounded-lg px-3 py-2 text-center text-xs" role="alert" data-testid="status-estimate-save-error">{saveErrorMessage || 'We could not save this estimate right now. You can still print, copy, or send it on WhatsApp.'}</p>}
          {savedEstimate && <SavedEstimateCard estimate={savedEstimate} onPrint={onPrintSaved} />}
-        <button type="button" onClick={onReset} className="mt-3 flex w-full items-center justify-center gap-2 py-2 text-xs text-[#aeb7ac] transition hover:text-[#f7f0e2]" data-testid="button-reset-estimate"><RotateCcw size={13} /> Reset estimate</button>
+        {editing && <Link href="/999" className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-white/20 py-2.5 text-xs font-semibold text-[#f7f0e2] transition hover:bg-white/10" data-testid="link-back-admin">Back to admin panel</Link>}
+        {!editing && <button type="button" onClick={onReset} className="mt-3 flex w-full items-center justify-center gap-2 py-2 text-xs text-[#aeb7ac] transition hover:text-[#f7f0e2]" data-testid="button-reset-estimate"><RotateCcw size={13} /> Reset estimate</button>}
       </div>
     </aside>
   );
@@ -810,6 +888,8 @@ function SavedEstimateCard({ estimate, onPrint }: { estimate: EstimatePayload; o
         {estimate.pricing.discountEnabled && (estimate.pricing.discountAmount ?? 0) > 0 && <SavedTotal label={discountLabelText(estimate.pricing.discountPercent ?? 0, estimate.pricing.discountFlat ?? 0)} value={`− ${currency(estimate.pricing.discountAmount ?? 0)}`} />}
         {estimate.pricing.gstEnabled && <SavedTotal label={`GST (${estimate.pricing.gstRate}%)`} value={currency(estimate.pricing.gstAmount)} />}
         <SavedTotal label="Grand total" value={currency(estimate.pricing.grandTotal)} strong />
+        {quoteAdvance(estimate.pricing).paid && <SavedTotal label="Advance paid" value={`− ${currency(quoteAdvance(estimate.pricing).amount)}`} />}
+        {quoteAdvance(estimate.pricing).paid && <SavedTotal label="Balance to pay" value={currency(quoteAdvance(estimate.pricing).balance)} strong />}
         {estimate.pricing.showCostPerGuest !== false && <SavedTotal label="Cost per guest" value={currency(estimate.pricing.costPerGuest)} />}
       </div>
        <button type="button" onClick={onPrint} className="saved-print-button mt-4 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg px-3 font-semibold transition" data-testid="button-print-saved-estimate"><Printer size={15} /> Print bill</button>
@@ -864,7 +944,7 @@ function PrintServiceTable({ title, lines, details, showLineTotal = true, showDe
 
 function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: PrintData | null }) {
   if (!printData) return null;
-  const { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots, billNumber } = printData;
+  const { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots, billNumber, advanceAmount, balanceDue } = printData;
   const foodLines = lines.filter((line) => line.categoryId === 'food');
   const otherLines = lines.filter((line) => line.categoryId !== 'food');
   return (
@@ -902,6 +982,8 @@ function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: Pr
         {discountAmount > 0 && <div className="print-total-row"><span>{discountLabel}</span><strong>− {currency(discountAmount)}</strong></div>}
         {gstEnabled && <div className="print-total-row"><span>GST ({gstRate}%)</span><strong>{currency(gstAmount)}</strong></div>}
         <div className="print-total-row print-grand"><span>Grand total</span><strong>{currency(grandTotal)}</strong></div>
+        {advanceAmount > 0 && <div className="print-total-row"><span>Advance paid</span><strong>− {currency(advanceAmount)}</strong></div>}
+        {advanceAmount > 0 && <div className="print-total-row print-balance"><span>Balance to pay</span><strong>{currency(balanceDue)}</strong></div>}
         {showCostPerGuest && <div className="print-total-row"><span>Cost per guest</span><strong>{currency(costPerGuest)}</strong></div>}
       </div>
        <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
@@ -920,11 +1002,31 @@ function EstimatorPage() {
   const [customerGstNumberVisible, setCustomerGstNumberVisible] = useState(true);
   const [eventSlots, setEventSlots] = useState<EventSlots>({});
   const bookedSlotsQuery = useBookedSlots();
-  const bookedSlots = bookedSlotsQuery.data ?? {};
   const [showCostPerGuest, setShowCostPerGuest] = useState(true);
   const [discountEnabled, setDiscountEnabled] = useState(false);
   const [discountPercent, setDiscountPercent] = useState('');
   const [discountFlat, setDiscountFlat] = useState('');
+  const [advancePaid, setAdvancePaid] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState('');
+  // Editing a saved bill: /111/?edit=<bill no> (opened with the Edit button in the admin panel).
+  const editReference = useMemo(() => (typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('edit') ?? ''), []);
+  const isEditing = Boolean(editReference);
+  const [editQuote, setEditQuote] = useState<Quote | null>(null);
+  const [priceOverrides, setPriceOverrides] = useState<Record<string, number>>({});
+  const [saveError, setSaveError] = useState('');
+  const editQuery = useGetQuote(editReference, { query: { enabled: isEditing, queryKey: getGetQuoteQueryKey(editReference) } });
+  const updateQuoteMutation = useUpdateQuote();
+  // While editing a booked bill, its own slots must not count as "already booked" against itself.
+  const bookedSlots = useMemo(() => {
+    const raw = bookedSlotsQuery.data ?? {};
+    if (!editQuote || editQuote.status !== 'confirmed') return raw;
+    const next: Record<string, SlotId[]> = { ...raw };
+    Object.entries(editQuote.customer.eventSlots ?? {}).forEach(([date, list]) => {
+      const mine = sortSlots(list);
+      next[date] = (next[date] ?? []).filter((slot) => !mine.includes(slot));
+    });
+    return next;
+  }, [bookedSlotsQuery.data, editQuote]);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [copyStatus, setCopyStatus] = useState<CopyStatus>('idle');
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
@@ -954,7 +1056,7 @@ function EstimatorPage() {
 
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+      const saved = isEditing ? null : window.localStorage.getItem(DRAFT_STORAGE_KEY);
       if (saved) {
         const draft = JSON.parse(saved) as {
           details?: Partial<Details>;
@@ -969,6 +1071,8 @@ function EstimatorPage() {
           discountEnabled?: boolean;
           discountPercent?: string;
           discountFlat?: string;
+          advancePaid?: boolean;
+          advanceAmount?: string;
         };
         if (draft.details) setDetails((current) => ({ ...current, ...draft.details }));
         if (draft.selections && typeof draft.selections === 'object') setSelections(draft.selections);
@@ -982,6 +1086,8 @@ function EstimatorPage() {
         if (typeof draft.discountEnabled === 'boolean') setDiscountEnabled(draft.discountEnabled);
         if (typeof draft.discountPercent === 'string') setDiscountPercent(draft.discountPercent);
         if (typeof draft.discountFlat === 'string') setDiscountFlat(draft.discountFlat);
+        if (typeof draft.advancePaid === 'boolean') setAdvancePaid(draft.advancePaid);
+        if (typeof draft.advanceAmount === 'string') setAdvanceAmount(draft.advanceAmount);
       }
     } catch {
       window.localStorage.removeItem(DRAFT_STORAGE_KEY);
@@ -991,15 +1097,40 @@ function EstimatorPage() {
   }, []);
 
   useEffect(() => {
-    if (!isHydrated) return;
+    // A saved bill that is being edited must never overwrite the normal draft kept on this device.
+    if (!isHydrated || isEditing) return;
     try {
-       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat }));
+       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, advancePaid, advanceAmount }));
     } catch {
       // The estimator remains usable when browser storage is unavailable.
     }
-  }, [details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, isHydrated]);
+  }, [details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, advancePaid, advanceAmount, isEditing, isHydrated]);
 
   const guestCount = Number(details.guests) || 0;
+  useEffect(() => {
+    const quote = editQuery.data;
+    if (!quote || editQuote) return;
+    setEditQuote(quote);
+    const savedType = quote.customer.eventType;
+    const knownType = EVENT_TYPES.includes(savedType) && savedType !== 'Other';
+    setDetails({ name: quote.customer.name, mobile: quote.customer.mobile, eventType: knownType ? savedType : 'Other', otherEventType: knownType || savedType === 'Other' ? '' : savedType, eventDate: quoteEventDates(quote.customer).join(','), guests: String(quote.customer.guests), billNumber: quote.reference, customerGstNumber: quote.customer.gstNumber ?? '' });
+    setSelections(Object.fromEntries(quote.services.map((service) => [service.id, service.pricingType === 'perUnit' ? service.quantity : 1])));
+    setPriceOverrides(Object.fromEntries(quote.services.map((service) => [service.id, service.unitPrice])));
+    setGstEnabled(quote.pricing.gstEnabled);
+    setGstRate(Math.min(28, Math.max(0, Number(quote.pricing.gstRate) || 0)));
+    setHallGstNumber((quote.pricing.gstNumber ?? '').slice(0, 15));
+    setGstNumberVisible(quote.pricing.gstNumberVisible);
+    setShowCostPerGuest(quote.pricing.showCostPerGuest !== false);
+    setEventSlots(Object.fromEntries(Object.entries(quote.customer.eventSlots ?? {}).map(([date, list]) => [date, sortSlots(list)])));
+    const hadDiscount = Boolean(quote.pricing.discountEnabled) && (quote.pricing.discountAmount ?? 0) > 0;
+    setDiscountEnabled(hadDiscount);
+    setDiscountPercent(hadDiscount && quote.pricing.discountPercent ? String(quote.pricing.discountPercent) : '');
+    setDiscountFlat(hadDiscount && quote.pricing.discountFlat ? String(quote.pricing.discountFlat) : '');
+    const savedAdvance = quoteAdvance(quote.pricing);
+    setAdvancePaid(savedAdvance.paid);
+    setAdvanceAmount(savedAdvance.paid ? String(savedAdvance.amount) : '');
+  }, [editQuery.data, editQuote]);
+
   const lines = useMemo<Line[]>(() => catalog.flatMap((category) => category.subcategories.flatMap((subcategory) => subcategory.items.filter((item) => item.active))).flatMap((item) => {
     const rawQuantity = selections[item.id] ?? 0;
     const quantity = rawQuantity && item.pricingType === 'perUnit'
@@ -1008,9 +1139,13 @@ function EstimatorPage() {
     if (!quantity) return [];
     const category = catalog.find((entry) => entry.id === item.categoryId);
     const subcategory = category?.subcategories.find((entry) => entry.id === item.subcategoryId);
-    const total = item.pricingType === 'perPerson' ? item.price * guestCount : item.price * quantity;
-    return [{ ...item, categoryName: category?.name ?? '', subcategoryName: subcategory?.name ?? '', quantity, total }];
-  }), [catalog, guestCount, selections]);
+    // Services already on a bill being edited keep the price saved on that bill.
+    const price = priceOverrides[item.id] ?? item.price;
+    const total = item.pricingType === 'perPerson' ? price * guestCount : price * quantity;
+    return [{ ...item, price, categoryName: category?.name ?? '', subcategoryName: subcategory?.name ?? '', quantity, total }];
+  }), [catalog, guestCount, selections, priceOverrides]);
+
+  const missingServices = useMemo(() => (editQuote ? editQuote.services.filter((service) => !lines.some((line) => line.id === service.id)) : []), [editQuote, lines]);
 
   const categoryTotals = useMemo(() => lines.reduce<Record<string, number>>((totals, line) => {
     totals[line.categoryId] = (totals[line.categoryId] || 0) + line.total;
@@ -1028,6 +1163,7 @@ function EstimatorPage() {
   const gstAmount = gstEnabled ? taxableAmount * (gstRate / 100) : 0;
   const grandTotal = taxableAmount + gstAmount;
   const costPerGuest = guestCount > 0 ? grandTotal / guestCount : 0;
+  const { amount: advanceValue, balance: balanceDue } = quoteAdvance({ grandTotal, advancePaid, advanceAmount: Math.max(0, Number(advanceAmount) || 0) });
 
   const onChange = (field: keyof Details, value: string) => {
     setDetails((current) => ({ ...current, [field]: value }));
@@ -1057,7 +1193,7 @@ function EstimatorPage() {
     if (details.eventType === 'Other' && !details.otherEventType.trim()) nextErrors.otherEventType = 'Describe the occasion you are planning.';
     const chosenDates = parseEventDates(details.eventDate);
     if (!chosenDates.length) nextErrors.eventDate = 'Choose at least one event date.';
-    else if (chosenDates.some((date) => date < localISODate(new Date()))) nextErrors.eventDate = 'Choose future dates only.';
+    else if (chosenDates.some((date) => date < localISODate(new Date()) && !(editQuote ? quoteEventDates(editQuote.customer) : []).includes(date))) nextErrors.eventDate = 'Choose future dates only.';
     else {
       const missingSlot = chosenDates.find((date) => !eventSlotsForDates[date]?.length);
       if (missingSlot) nextErrors.eventDate = `Choose a time slot for ${formatEventDates([missingSlot])}.`;
@@ -1098,18 +1234,18 @@ function EstimatorPage() {
       total: line.total,
       description: line.description,
     })),
-    pricing: { foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, showCostPerGuest, discountEnabled: discountAmount > 0, discountPercent: discountPercentValue, discountFlat: discountFlatValue, discountAmount, grandTotal, costPerGuest },
+    pricing: { foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, showCostPerGuest, discountEnabled: discountAmount > 0, discountPercent: discountPercentValue, discountFlat: discountFlatValue, discountAmount, grandTotal, costPerGuest, advancePaid: advanceValue > 0, advanceAmount: advanceValue, balanceDue },
   });
 
   const estimateMessage = () => {
     const payload = buildEstimatePayload();
     const serviceText = payload.services.length ? payload.services.map((service) => `• ${service.name} (${service.pricingType === 'perPerson' ? `${payload.customer.guests} guests` : `qty ${service.quantity}`}): ${isFoodCategory(service.category) ? `${currency(service.unitPrice)} ${serviceRateLabel(service.pricingType)}` : currency(service.total)}`).join('\n') : 'No additional services selected';
-     return `Hello ${BANQUET_NAME}, I would like to discuss this quotation.\n\nBill No: ${payload.reference || 'Not assigned'}\nCustomer: ${payload.customer.name || 'Not provided'}\nMobile: ${payload.customer.mobile || 'Not provided'}\nEvent: ${payload.customer.eventType || 'Not provided'}\n${hasAnySlots(payload.customer.eventSlots) ? `Date & time:\n${scheduleLines(quoteEventDates(payload.customer), payload.customer.eventSlots).map((line) => `• ${formatEventDates([line.date])}: ${line.text}`).join('\n')}` : `Date: ${formatEventDates(quoteEventDates(payload.customer))}`}\nGuests: ${payload.customer.guests || 'Not provided'}\n${payload.customer.gstNumber ? `Customer GST number: ${payload.customer.gstNumber}\n` : ''}${payload.pricing.gstNumberVisible && payload.pricing.gstNumber ? `Hall GST number: ${payload.pricing.gstNumber}\n` : ''}\nSelected services:\n${serviceText}\n\nFood price per plate: ${currency(payload.pricing.foodPerPlate)}\nSubtotal: ${currency(payload.pricing.subtotal)}\n${payload.pricing.discountEnabled && (payload.pricing.discountAmount ?? 0) > 0 ? `${discountLabelText(payload.pricing.discountPercent ?? 0, payload.pricing.discountFlat ?? 0)}: -${currency(payload.pricing.discountAmount ?? 0)}\n` : ''}${payload.pricing.gstEnabled ? `GST (${payload.pricing.gstRate}%): ${currency(payload.pricing.gstAmount)}\n` : ''}Grand total: ${currency(payload.pricing.grandTotal)}${payload.pricing.showCostPerGuest !== false ? `\nCost per guest: ${currency(payload.pricing.costPerGuest)}` : ''}`;
+     return `Hello ${BANQUET_NAME}, I would like to discuss this quotation.\n\nBill No: ${payload.reference || 'Not assigned'}\nCustomer: ${payload.customer.name || 'Not provided'}\nMobile: ${payload.customer.mobile || 'Not provided'}\nEvent: ${payload.customer.eventType || 'Not provided'}\n${hasAnySlots(payload.customer.eventSlots) ? `Date & time:\n${scheduleLines(quoteEventDates(payload.customer), payload.customer.eventSlots).map((line) => `• ${formatEventDates([line.date])}: ${line.text}`).join('\n')}` : `Date: ${formatEventDates(quoteEventDates(payload.customer))}`}\nGuests: ${payload.customer.guests || 'Not provided'}\n${payload.customer.gstNumber ? `Customer GST number: ${payload.customer.gstNumber}\n` : ''}${payload.pricing.gstNumberVisible && payload.pricing.gstNumber ? `Hall GST number: ${payload.pricing.gstNumber}\n` : ''}\nSelected services:\n${serviceText}\n\nFood price per plate: ${currency(payload.pricing.foodPerPlate)}\nSubtotal: ${currency(payload.pricing.subtotal)}\n${payload.pricing.discountEnabled && (payload.pricing.discountAmount ?? 0) > 0 ? `${discountLabelText(payload.pricing.discountPercent ?? 0, payload.pricing.discountFlat ?? 0)}: -${currency(payload.pricing.discountAmount ?? 0)}\n` : ''}${payload.pricing.gstEnabled ? `GST (${payload.pricing.gstRate}%): ${currency(payload.pricing.gstAmount)}\n` : ''}Grand total: ${currency(payload.pricing.grandTotal)}${advanceMessage(payload.pricing)}${payload.pricing.showCostPerGuest !== false ? `\nCost per guest: ${currency(payload.pricing.costPerGuest)}` : ''}`;
   };
 
   const buildPrintData = (payload?: EstimatePayload): PrintData => {
     if (!payload) {
-       return { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots: eventSlotsForDates, billNumber: details.billNumber };
+       return { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber: hallGstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots: eventSlotsForDates, billNumber: details.billNumber, advanceAmount: advanceValue, balanceDue };
     }
 
     const savedLines: PrintableLine[] = payload.services.map((service) => {
@@ -1150,6 +1286,8 @@ function EstimatorPage() {
       showCostPerGuest: payload.pricing.showCostPerGuest !== false,
       eventSlots: payload.customer.eventSlots ?? {},
        billNumber: payload.reference,
+      advanceAmount: quoteAdvance(payload.pricing).amount,
+      balanceDue: quoteAdvance(payload.pricing).balance,
     };
   };
   const openPrintDialog = (payload?: EstimatePayload) => {
@@ -1198,18 +1336,27 @@ function EstimatorPage() {
     if (!popup) window.location.assign(whatsappUrl);
   };
   const saveEstimate = () => {
+    if (isEditing && !editQuote) return;
     if (!validate()) return;
     const payload = buildEstimatePayload();
     setSaveStatus('saving');
-    createQuoteMutation.mutate({ data: payload }, {
+    setSaveError('');
+    const handlers = {
       onSuccess: () => {
         setSaveStatus('saved');
         setSavedEstimate(payload);
         void queryClient.invalidateQueries({ queryKey: getListQuotesQueryKey() });
         void queryClient.invalidateQueries({ queryKey: getGetCatalogQueryKey() });
+        void queryClient.invalidateQueries({ queryKey: ['supabase', 'booked-slots'] });
+        if (isEditing) void queryClient.invalidateQueries({ queryKey: getGetQuoteQueryKey(editReference) });
       },
-      onError: () => setSaveStatus('error'),
-    });
+      onError: (error: Error) => {
+        setSaveStatus('error');
+        if (isEditing) setSaveError(error.message);
+      },
+    };
+    if (isEditing) updateQuoteMutation.mutate({ reference: editReference, data: payload }, handlers);
+    else createQuoteMutation.mutate({ data: payload }, handlers);
   };
   const resetEstimate = () => {
     if (window.confirm('Reset this estimate? All event details and selections will be cleared.')) {
@@ -1225,6 +1372,8 @@ function EstimatorPage() {
       setDiscountEnabled(false);
       setDiscountPercent('');
       setDiscountFlat('');
+      setAdvancePaid(false);
+      setAdvanceAmount('');
       setErrors({});
       setCopyStatus('idle');
       setSaveStatus('idle');
@@ -1249,7 +1398,7 @@ function EstimatorPage() {
             <div className="brand-header__meta hidden items-center gap-4 text-xs font-medium sm:flex">
               <span className="brand-header__badge"><Sparkles size={12} /> Signature planning</span>
               <span className="flex items-center gap-2"><Clock3 size={14} className="brand-header__accent" /> Takes about 2 minutes</span>
-              {isHydrated && <span className="brand-header__muted">Draft saved on this device</span>}
+              {isHydrated && !isEditing && <span className="brand-header__muted">Draft saved on this device</span>}
             </div>
           </div>
         </header>
@@ -1268,7 +1417,17 @@ function EstimatorPage() {
 
           <div className="mt-8 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_390px] xl:gap-10">
             <div className="space-y-6">
-              <EventDetails eventSlots={eventSlots} bookedSlots={bookedSlots} onEventSlotsChange={setEventSlots} details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
+              {isEditing && (
+                <div className="rounded-2xl border border-[#d6ae60] bg-[#fff8e6] p-4 text-sm text-[#5d4a1f]" role="status" data-testid="banner-edit-mode">
+                  <p className="flex items-center gap-2 font-bold"><Pencil size={15} /> Editing saved bill {editReference}{editQuote ? ` — ${editQuote.customer.name}` : ''}</p>
+                  {editQuery.isLoading && <p className="mt-1 text-xs">Loading the saved bill…</p>}
+                  {editQuery.isError && <p className="mt-1 text-xs text-[#8a3d32]">This bill could not be opened. Please sign in on the <Link href="/999" className="font-bold underline">admin page</Link> first, then press Edit again.</p>}
+                  {editQuote && <p className="mt-1 text-xs">Change anything below and press <strong>Save changes</strong>. The bill number and the Booked status stay the same. Services already on this bill keep their saved prices.</p>}
+                  {editQuote && !catalogQuery.isLoading && missingServices.length > 0 && <p className="mt-2 rounded-lg bg-[#fbe4dc] px-3 py-2 text-xs text-[#8a3d32]">These saved services are no longer in the catalog and will be removed if you save: {missingServices.map((service) => service.name).join(', ')}.</p>}
+                </div>
+              )}
+              <EventDetails billNumberLocked={isEditing} eventSlots={eventSlots} bookedSlots={bookedSlots} onEventSlotsChange={setEventSlots} details={details} errors={errors} hallGstNumber={hallGstNumber} customerGstNumber={details.customerGstNumber} gstNumberVisible={gstNumberVisible} customerGstNumberVisible={customerGstNumberVisible} onChange={onChange} onHallGstNumberChange={setHallGstNumber} onCustomerGstNumberChange={(value) => setDetails((current) => ({ ...current, customerGstNumber: value }))} onGstNumberVisibilityChange={setGstNumberVisible} onCustomerGstNumberVisibilityChange={setCustomerGstNumberVisible} />
+              <AdvanceBlock advancePaid={advancePaid} advanceAmount={advanceAmount} grandTotal={grandTotal} onPaidChange={(paid) => { setAdvancePaid(paid); if (!paid) setAdvanceAmount(''); }} onAmountChange={setAdvanceAmount} />
               <DiscountBlock enabled={discountEnabled} percent={discountPercent} flat={discountFlat} discountAmount={discountAmount} onEnabledChange={setDiscountEnabled} onPercentChange={setDiscountPercent} onFlatChange={setDiscountFlat} />
                <section className="page-enter stagger-1">
                 <div className="mb-5 flex items-end justify-between gap-4 px-1">
@@ -1280,7 +1439,7 @@ function EstimatorPage() {
                  {catalog.length === 0 ? <div className="rounded-2xl border border-dashed border-[#d8cbbb] bg-[#fffdf8] p-8 text-center text-sm text-[#77756e]">Services are being refreshed. Please check back shortly.</div> : <div className="space-y-3">{catalog.map((category) => <CategoryCard key={category.id} category={category} selections={selections} onToggle={onToggle} onQuantityChange={onQuantityChange} />)}</div>}
               </section>
             </div>
-             <SummaryPanel catalog={catalog} details={details} eventSlots={eventSlotsForDates} lines={lines} categoryTotals={categoryTotals} foodPerPlate={foodPerPlate} subtotal={subtotal} gstEnabled={gstEnabled} gstRate={gstRate} gstAmount={gstAmount} discountAmount={discountAmount} discountLabel={discountLabel} grandTotal={grandTotal} costPerGuest={costPerGuest} showCostPerGuest={showCostPerGuest} onShowCostPerGuestChange={setShowCostPerGuest} onGstChange={setGstEnabled} onGstRateChange={setGstRate} onPrint={printEstimate} onPrintSaved={printSavedEstimate} onCopy={copyEstimate} copyStatus={copyStatus} onWhatsApp={sendWhatsApp} onSaveEstimate={saveEstimate} saveStatus={saveStatus} savedEstimate={savedEstimate} onReset={resetEstimate} />
+             <SummaryPanel catalog={catalog} details={details} eventSlots={eventSlotsForDates} lines={lines} categoryTotals={categoryTotals} foodPerPlate={foodPerPlate} subtotal={subtotal} gstEnabled={gstEnabled} gstRate={gstRate} gstAmount={gstAmount} discountAmount={discountAmount} discountLabel={discountLabel} grandTotal={grandTotal} advanceAmount={advanceValue} balanceDue={balanceDue} editing={isEditing} saveErrorMessage={saveError} costPerGuest={costPerGuest} showCostPerGuest={showCostPerGuest} onShowCostPerGuestChange={setShowCostPerGuest} onGstChange={setGstEnabled} onGstRateChange={setGstRate} onPrint={printEstimate} onPrintSaved={printSavedEstimate} onCopy={copyEstimate} copyStatus={copyStatus} onWhatsApp={sendWhatsApp} onSaveEstimate={saveEstimate} saveStatus={saveStatus} savedEstimate={savedEstimate} onReset={resetEstimate} />
           </div>
         </main>
         <div className="mobile-dock fixed inset-x-0 bottom-0 z-20 flex items-center justify-between gap-4 border-t border-[#ded1bf] bg-[#fffdf8]/90 px-5 py-3 lg:hidden">
