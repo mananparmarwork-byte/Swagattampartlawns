@@ -21,7 +21,7 @@ import { findConflicts, hasAnySlots, scheduleLines, slotText } from '@/lib/booki
 import { OccupancyCalendar } from '@/components/occupancy-calendar';
 import type { Quote } from '@/lib/supabase-queries';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { ArrowLeft, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, Boxes, Check, ChevronDown, ChevronRight, CircleAlert, LayoutGrid, ListChecks, Pencil, FileText, Plus, Printer, RotateCcw, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { Link } from 'wouter';
 import { CATALOG_UPDATED_EVENT, ORIGINAL_CATALOG, cacheCatalog, cloneCatalog, loadCatalog, saveCatalog } from '@/lib/catalog';
 import type { CatalogCategory, CatalogItem, CatalogSubcategory, PricingType } from '@/lib/catalog';
@@ -116,6 +116,63 @@ function SavedQuotePrintSheet({ quote }: { quote: Quote | null }) {
   );
 }
 
+
+// ---- Monthly grouping and the "Print all enquiries" report ----
+const monthKeyOf = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const monthLabelOf = (key: string) => new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+type MonthGroup = { key: string; label: string; quotes: Quote[]; booked: number; budget: number };
+function groupQuotesByMonth(quotes: Quote[]): MonthGroup[] {
+  const map = new Map<string, Quote[]>();
+  quotes.forEach((quote) => { const key = monthKeyOf(quote.createdAt); map.set(key, [...(map.get(key) ?? []), quote]); });
+  return Array.from(map.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([key, list]) => ({ key, label: monthLabelOf(key), quotes: list, booked: list.filter((quote) => quote.status === 'confirmed').length, budget: list.reduce((sum, quote) => sum + quote.pricing.grandTotal, 0) }));
+}
+const shortDate = (iso: string) => new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+function EnquiryReportSheet({ report }: { report: { title: string; quotes: Quote[] } | null }) {
+  if (!report) return null;
+  const groups = groupQuotesByMonth(report.quotes);
+  const totalBudget = report.quotes.reduce((sum, quote) => sum + quote.pricing.grandTotal, 0);
+  const bookedCount = report.quotes.filter((quote) => quote.status === 'confirmed').length;
+  return (
+    <main className="print-sheet enquiry-report">
+      <div className="print-header flex items-center justify-between gap-6">
+        <div className="flex items-center gap-3"><img src={BRAND_LOGO} alt="Swagattam logo" className="print-logo" /><div><p className="print-label">Enquiry report</p><h1 className="mt-1 text-2xl font-semibold text-[#864936]">Swagattam Party Lawns</h1><p className="mt-1 text-xs text-[#6e6a61]">{report.title}</p></div></div>
+        <div className="text-right"><p className="print-label">Prepared on</p><strong className="text-xs">{shortDate(new Date().toISOString())}</strong><p className="mt-2 print-label">Enquiries</p><strong className="text-xs">{report.quotes.length} · {bookedCount} booked</strong></div>
+      </div>
+      {groups.map((group) => (
+        <section key={group.key} className="enquiry-month">
+          <h2>{group.label} <span>{group.quotes.length} enquir{group.quotes.length === 1 ? 'y' : 'ies'} · {group.booked} booked · Total budget {money(group.budget)}</span></h2>
+          <table className="print-table enquiry-table">
+            <thead><tr><th>#</th><th>Enquiry date</th><th>Name</th><th>Mobile</th><th>Occasion</th><th>Event date(s)</th><th>Days</th><th>Guests</th><th>Price / plate</th><th>Total budget</th><th>Status</th></tr></thead>
+            <tbody>
+              {group.quotes.map((quote, index) => {
+                const dates = quoteEventDates(quote.customer);
+                return <tr key={quote.id}>
+                  <td>{index + 1}</td>
+                  <td>{shortDate(quote.createdAt)}</td>
+                  <td><strong>{quote.customer.name}</strong></td>
+                  <td>{quote.customer.mobile}</td>
+                  <td>{quote.customer.eventType}</td>
+                  <td>{formatEventDates(dates)}</td>
+                  <td>{dates.length} {dates.length === 1 ? 'day' : 'days'}</td>
+                  <td>{quote.customer.guests.toLocaleString('en-IN')}</td>
+                  <td>{quote.pricing.foodPerPlate > 0 ? money(quote.pricing.foodPerPlate) : '—'}</td>
+                  <td><strong>{money(quote.pricing.grandTotal)}</strong></td>
+                  <td>{quote.status === 'confirmed' ? 'Booked' : 'Not booked'}</td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </section>
+      ))}
+      <div className="print-totals"><div className="print-total-row print-grand"><span>All enquiries · total budget</span><strong>{money(totalBudget)}</strong></div></div>
+      <div className="print-notes">Total budget is the grand total of each saved estimate. Price / plate is the food price per guest.</div>
+    </main>
+  );
+}
+
 function Modal({ title, eyebrow, children, onClose, testId }: { title: string; eyebrow: string; children: ReactNode; onClose: () => void; testId: string }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-[#1d2e25]/45 p-4 backdrop-blur-[2px]" role="dialog" aria-modal="true" data-testid={testId}>
@@ -186,9 +243,11 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const [savedAt, setSavedAt] = useState(() => new Date());
   const [selectedQuoteReference, setSelectedQuoteReference] = useState<string | null>(null);
   const [quoteToPrint, setQuoteToPrint] = useState<Quote | null>(null);
+  const [reportToPrint, setReportToPrint] = useState<{ title: string; quotes: Quote[] } | null>(null);
+  const [openMonths, setOpenMonths] = useState<Record<string, boolean>>({});
   const queryClient = useQueryClient();
   const catalogQuery = useGetCatalog();
-  const quotesQuery = useListQuotes({ limit: 100 });
+  const quotesQuery = useListQuotes({ limit: 1000 });
   const deleteQuoteMutation = useDeleteQuote();
   const setBookedMutation = useSetQuoteBooked();
   const [bookingFilter, setBookingFilter] = useState<'all' | 'booked' | 'open'>('all');
@@ -202,6 +261,8 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const allQuotes = quotesQuery.data ?? [];
   const bookedCount = allQuotes.filter((quote) => quote.status === 'confirmed').length;
   const filteredQuotes = allQuotes.filter((quote) => bookingFilter === 'all' || (bookingFilter === 'booked' ? quote.status === 'confirmed' : quote.status !== 'confirmed'));
+  const monthGroups = useMemo(() => groupQuotesByMonth(filteredQuotes), [filteredQuotes]);
+  const currentMonthKey = monthKeyOf(new Date().toISOString());
   const stats = useMemo(() => {
     const subcategories = catalog.reduce((sum, category) => sum + category.subcategories.length, 0);
     const services = catalog.reduce((sum, category) => sum + category.subcategories.reduce((inner, subcategory) => inner + subcategory.items.length, 0), 0);
@@ -235,6 +296,16 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
     });
   };
   const updateCategory = (categoryId: string, updater: (category: CatalogCategory) => CatalogCategory) => commit(catalog.map((category) => category.id === categoryId ? updater(category) : category));
+  // Moves a category up (-1) or down (+1). The new order is saved to Supabase together with the catalog,
+  // so it is the same every time the admin panel or the customer estimator is opened.
+  const moveCategory = (categoryId: string, direction: -1 | 1) => {
+    const index = catalog.findIndex((category) => category.id === categoryId);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= catalog.length) return;
+    const next = [...catalog];
+    [next[index], next[target]] = [next[target], next[index]];
+    commit(next);
+  };
   const deleteCategory = (category: CatalogCategory) => { if (window.confirm(`Delete ${category.name} and all of its services?`)) commit(catalog.filter((entry) => entry.id !== category.id)); };
   const deleteSubcategory = (categoryId: string, subcategory: CatalogSubcategory) => { if (window.confirm(`Delete ${subcategory.name} and its services?`)) updateCategory(categoryId, (category) => ({ ...category, subcategories: category.subcategories.filter((entry) => entry.id !== subcategory.id) })); };
   const deleteService = (categoryId: string, subcategoryId: string, service: CatalogItem) => { if (window.confirm(`Delete ${service.name}?`)) updateCategory(categoryId, (category) => ({ ...category, subcategories: category.subcategories.map((subcategory) => subcategory.id === subcategoryId ? { ...subcategory, items: subcategory.items.filter((item) => item.id !== service.id) } : subcategory) })); };
@@ -271,7 +342,14 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
       window.alert(error instanceof Error ? error.message : 'Could not update the booking.');
     }
   };
+  const printReport = (title: string, quotes: Quote[]) => {
+    if (!quotes.length) { window.alert('There are no enquiries to print.'); return; }
+    setQuoteToPrint(null);
+    setReportToPrint({ title, quotes });
+    window.setTimeout(() => window.print(), 100);
+  };
   const printQuote = (quote: Quote) => {
+    setReportToPrint(null);
     setQuoteToPrint(quote);
     window.setTimeout(() => window.print(), 0);
   };
@@ -293,6 +371,11 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
     setModal(null);
   };
   const restore = () => { commit(cloneCatalog(ORIGINAL_CATALOG)); setModal(null); };
+
+  const renderQuoteRow = (quote: Quote) => <div key={quote.id} className="flex w-full flex-col items-start gap-3 py-4 text-left transition hover:bg-[#fcf8f0] sm:flex-row sm:items-center sm:justify-between sm:px-2" data-testid={`row-saved-quote-${quote.reference}`}>
+                <button type="button" onClick={() => setSelectedQuoteReference(quote.reference)} className="min-w-0 text-left" data-testid={`button-open-quote-${quote.reference}`}><span className="flex flex-wrap items-center gap-2"><strong className="text-sm text-[#2e4437]">{quote.customer.name}</strong><span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] ${quote.status === 'confirmed' ? 'bg-[#864936] text-white' : 'bg-[#eee6d9] text-[#7a776e]'}`} data-testid={`badge-booking-${quote.reference}`}>{quote.status === 'confirmed' ? 'Booked' : 'Not booked'}</span></span><span className="mt-1 block text-xs text-[#858178]">{quote.customer.eventType} · {quote.customer.guests.toLocaleString('en-IN')} guests · {quote.reference}</span><span className="mt-1 block text-xs font-semibold text-[#5f655e]" data-testid={`text-schedule-${quote.reference}`}>{hasAnySlots(quote.customer.eventSlots) ? scheduleLines(quoteEventDates(quote.customer), quote.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${slotText(quote.customer.eventSlots?.[line.date], false)}`).join(' · ') : `${formatEventDates(quoteEventDates(quote.customer))} · time not set`}</span></button>
+                <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end"><span className="text-left sm:text-right"><strong className="block font-mono text-sm text-[#864936]">{money(quote.pricing.grandTotal)}</strong><span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[#938b7f]">{new Date(quote.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></span><span className="flex items-center gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e0d3c1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f655e]"><input type="checkbox" checked={quote.status === 'confirmed'} disabled={setBookedMutation.isPending} onChange={(e) => void toggleBooked(quote, e.target.checked)} className="size-4 accent-[#864936]" data-testid={`input-booked-${quote.reference}`} />Booked</label><button type="button" onClick={() => printQuote(quote)} className="icon-button" aria-label={`Print bill ${quote.reference}`} data-testid={`button-print-quote-${quote.reference}`}><Printer size={16} /></button><button type="button" onClick={() => deleteQuote(quote)} className="icon-button danger-hover" aria-label={`Delete bill ${quote.reference}`} data-testid={`button-delete-quote-${quote.reference}`} disabled={deleteQuoteMutation.isPending}><Trash2 size={16} /></button></span></span>
+              </div>;
 
   return <>
    <main className="admin-shell min-h-[100dvh]">
@@ -324,10 +407,11 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
            {quotesQuery.isFetching && <span className="text-xs text-[#8b887f]" role="status" data-testid="status-quotes-loading">Refreshing estimates…</span>}
          </div>
          {allQuotes.length > 0 && (
-           <div className="flex flex-wrap gap-2 pt-4" role="tablist" data-testid="tabs-booking-filter">
+           <div className="flex flex-wrap items-center gap-2 pt-4" role="tablist" data-testid="tabs-booking-filter">
              {([['all', 'All', allQuotes.length], ['booked', 'Booked', bookedCount], ['open', 'Not booked', allQuotes.length - bookedCount]] as const).map(([key, label, count]) => (
                <button key={key} type="button" role="tab" aria-selected={bookingFilter === key} onClick={() => setBookingFilter(key)} className={`rounded-full border px-4 py-1.5 text-xs font-bold transition ${bookingFilter === key ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#5f655e] hover:border-[#864936]'}`} data-testid={`tab-filter-${key}`}>{label} · {count}</button>
              ))}
+             <button type="button" onClick={() => printReport('All enquiries', allQuotes)} className="admin-primary ml-auto" data-testid="button-print-all-enquiries"><FileText size={15} /> Print all enquiries</button>
            </div>
          )}
          {quotesQuery.isLoading ? (
@@ -337,12 +421,24 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
          ) : (quotesQuery.data ?? []).length === 0 ? (
            <div className="empty-panel mt-4 py-10" data-testid="empty-quotes"><CircleAlert size={22} /><h2>No saved estimates yet</h2><p>When a visitor saves a brief, it will appear here for follow-up.</p></div>
          ) : (
-           <div className="divide-y divide-[#eee6d9]" data-testid="list-recent-quotes">
+           <div className="mt-4 space-y-3" data-testid="list-recent-quotes">
               {filteredQuotes.length === 0 && <p className="py-6 text-center text-sm text-[#7a776e]" data-testid="empty-filtered-quotes">No bills in this view.</p>}
-              {filteredQuotes.map((quote) => <div key={quote.id} className="flex w-full flex-col items-start gap-3 py-4 text-left transition hover:bg-[#fcf8f0] sm:flex-row sm:items-center sm:justify-between sm:px-2" data-testid={`row-saved-quote-${quote.reference}`}>
-                <button type="button" onClick={() => setSelectedQuoteReference(quote.reference)} className="min-w-0 text-left" data-testid={`button-open-quote-${quote.reference}`}><span className="flex flex-wrap items-center gap-2"><strong className="text-sm text-[#2e4437]">{quote.customer.name}</strong><span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.06em] ${quote.status === 'confirmed' ? 'bg-[#864936] text-white' : 'bg-[#eee6d9] text-[#7a776e]'}`} data-testid={`badge-booking-${quote.reference}`}>{quote.status === 'confirmed' ? 'Booked' : 'Not booked'}</span></span><span className="mt-1 block text-xs text-[#858178]">{quote.customer.eventType} · {quote.customer.guests.toLocaleString('en-IN')} guests · {quote.reference}</span><span className="mt-1 block text-xs font-semibold text-[#5f655e]" data-testid={`text-schedule-${quote.reference}`}>{hasAnySlots(quote.customer.eventSlots) ? scheduleLines(quoteEventDates(quote.customer), quote.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${slotText(quote.customer.eventSlots?.[line.date], false)}`).join(' · ') : `${formatEventDates(quoteEventDates(quote.customer))} · time not set`}</span></button>
-                <span className="flex w-full shrink-0 items-center justify-between gap-3 sm:w-auto sm:justify-end"><span className="text-left sm:text-right"><strong className="block font-mono text-sm text-[#864936]">{money(quote.pricing.grandTotal)}</strong><span className="mt-1 block text-[10px] uppercase tracking-[0.08em] text-[#938b7f]">{new Date(quote.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></span><span className="flex items-center gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#e0d3c1] bg-white px-2.5 py-1.5 text-xs font-bold text-[#5f655e]"><input type="checkbox" checked={quote.status === 'confirmed'} disabled={setBookedMutation.isPending} onChange={(e) => void toggleBooked(quote, e.target.checked)} className="size-4 accent-[#864936]" data-testid={`input-booked-${quote.reference}`} />Booked</label><button type="button" onClick={() => printQuote(quote)} className="icon-button" aria-label={`Print bill ${quote.reference}`} data-testid={`button-print-quote-${quote.reference}`}><Printer size={16} /></button><button type="button" onClick={() => deleteQuote(quote)} className="icon-button danger-hover" aria-label={`Delete bill ${quote.reference}`} data-testid={`button-delete-quote-${quote.reference}`} disabled={deleteQuoteMutation.isPending}><Trash2 size={16} /></button></span></span>
-              </div>)}
+              {monthGroups.map((group) => {
+                const open = openMonths[group.key] ?? group.key === currentMonthKey;
+                return <div key={group.key} data-testid={`month-group-${group.key}`}>
+                  <div className="flex flex-wrap items-center gap-3 bg-[#f6efe2] px-3 py-2.5 sm:px-4">
+                    <button type="button" onClick={() => setOpenMonths((current) => ({ ...current, [group.key]: !(current[group.key] ?? group.key === currentMonthKey) }))} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-expanded={open} data-testid={`button-toggle-month-${group.key}`}>
+                      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-white text-[#864936] shadow-sm">{open ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
+                      <span className="min-w-0">
+                        <strong className="block font-serif text-lg font-semibold text-[#263b31]">{group.label}</strong>
+                        <span className="block text-xs text-[#7a776e]">{group.quotes.length} enquir{group.quotes.length === 1 ? 'y' : 'ies'} · {group.booked} booked · Total budget {money(group.budget)}</span>
+                      </span>
+                    </button>
+                    <button type="button" onClick={() => printReport(`Enquiries for ${group.label}`, group.quotes)} className="admin-secondary" data-testid={`button-print-month-${group.key}`}><FileText size={14} /> Print month</button>
+                  </div>
+                  {open && <div className="divide-y divide-[#eee6d9]">{group.quotes.map((quote) => renderQuoteRow(quote))}</div>}
+                </div>;
+              })}
            </div>
          )}
        </section>
@@ -377,7 +473,7 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
             </div>
           </div>}
         </section>}
-       <div className="mt-8 space-y-4">{catalog.length === 0 ? <div className="empty-panel" data-testid="empty-catalog"><CircleAlert size={24} /><h2>Nothing in the catalog yet</h2><p>Start with a category to give customers something to choose from.</p><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-first-category"><Plus size={16} /> Add first category</button></div> : catalog.map((category) => <CategoryRow key={category.id} category={category} open={expanded[category.id] ?? true} onToggle={() => setExpanded((current) => ({ ...current, [category.id]: !(current[category.id] ?? true) }))} onEdit={() => setModal({ kind: 'category', category })} onDelete={() => deleteCategory(category)} onAddSubcategory={() => setModal({ kind: 'subcategory', categoryId: category.id })} onEditSubcategory={(subcategory) => setModal({ kind: 'subcategory', categoryId: category.id, subcategory })} onDeleteSubcategory={(subcategory) => deleteSubcategory(category.id, subcategory)} onAddService={(subcategory) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id })} onEditService={(subcategory, service) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id, service })} onToggleService={(subcategory, service) => updateCategory(category.id, (entry) => ({ ...entry, subcategories: entry.subcategories.map((group) => group.id === subcategory.id ? { ...group, items: group.items.map((item) => item.id === service.id ? { ...item, active: !item.active } : item) } : group) }))} onDeleteService={deleteService} />)}</div>
+       <div className="mt-8 space-y-4">{catalog.length === 0 ? <div className="empty-panel" data-testid="empty-catalog"><CircleAlert size={24} /><h2>Nothing in the catalog yet</h2><p>Start with a category to give customers something to choose from.</p><button type="button" onClick={() => setModal({ kind: 'category' })} className="admin-primary" data-testid="button-add-first-category"><Plus size={16} /> Add first category</button></div> : catalog.map((category, categoryIndex) => <CategoryRow key={category.id} category={category} canMoveUp={categoryIndex > 0} canMoveDown={categoryIndex < catalog.length - 1} onMoveUp={() => moveCategory(category.id, -1)} onMoveDown={() => moveCategory(category.id, 1)} open={expanded[category.id] ?? true} onToggle={() => setExpanded((current) => ({ ...current, [category.id]: !(current[category.id] ?? true) }))} onEdit={() => setModal({ kind: 'category', category })} onDelete={() => deleteCategory(category)} onAddSubcategory={() => setModal({ kind: 'subcategory', categoryId: category.id })} onEditSubcategory={(subcategory) => setModal({ kind: 'subcategory', categoryId: category.id, subcategory })} onDeleteSubcategory={(subcategory) => deleteSubcategory(category.id, subcategory)} onAddService={(subcategory) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id })} onEditService={(subcategory, service) => setModal({ kind: 'service', categoryId: category.id, subcategoryId: subcategory.id, service })} onToggleService={(subcategory, service) => updateCategory(category.id, (entry) => ({ ...entry, subcategories: entry.subcategories.map((group) => group.id === subcategory.id ? { ...group, items: group.items.map((item) => item.id === service.id ? { ...item, active: !item.active } : item) } : group) }))} onDeleteService={deleteService} />)}</div>
     </div>
     {modal?.kind === 'category' && <CategoryModal state={modal} onClose={() => setModal(null)} onSave={handleCategorySave} />}
     {modal?.kind === 'subcategory' && <SubcategoryModal state={modal} onClose={() => setModal(null)} onSave={handleSubcategorySave} />}
@@ -385,13 +481,14 @@ function AdminWorkspace({ onSignOut }: { onSignOut: () => Promise<void> }) {
     {modal?.kind === 'restore' && <Modal title="Restore original catalog?" eyebrow="Catalog / reset" onClose={() => setModal(null)} testId="dialog-restore"><div className="mt-5 rounded-xl border border-[#e8cfc5] bg-[#fff7f3] p-4 text-sm leading-6 text-[#73483b]"><CircleAlert size={18} className="mb-2" /><p>This will remove your local edits and bring back the original {ORIGINAL_CATALOG.length} categories and current services. This cannot be undone.</p></div><div className="mt-6 flex justify-end gap-2"><button type="button" onClick={() => setModal(null)} className="admin-secondary" data-testid="button-cancel-restore">Keep my edits</button><button type="button" onClick={restore} className="admin-danger" data-testid="button-confirm-restore"><RotateCcw size={16} /> Restore catalog</button></div></Modal>}
    </main>
    <SavedQuotePrintSheet quote={quoteToPrint} />
+   <EnquiryReportSheet report={reportToPrint} />
    </>;
 }
 
-function CategoryRow({ category, open, onToggle, onEdit, onDelete, onAddSubcategory, onEditSubcategory, onDeleteSubcategory, onAddService, onEditService, onToggleService, onDeleteService }: { category: CatalogCategory; open: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void; onAddSubcategory: () => void; onEditSubcategory: (subcategory: CatalogSubcategory) => void; onDeleteSubcategory: (subcategory: CatalogSubcategory) => void; onAddService: (subcategory: CatalogSubcategory) => void; onEditService: (subcategory: CatalogSubcategory, service: CatalogItem) => void; onToggleService: (subcategory: CatalogSubcategory, service: CatalogItem) => void; onDeleteService: (categoryId: string, subcategoryId: string, service: CatalogItem) => void }) {
+function CategoryRow({ category, canMoveUp, canMoveDown, onMoveUp, onMoveDown, open, onToggle, onEdit, onDelete, onAddSubcategory, onEditSubcategory, onDeleteSubcategory, onAddService, onEditService, onToggleService, onDeleteService }: { category: CatalogCategory; canMoveUp: boolean; canMoveDown: boolean; onMoveUp: () => void; onMoveDown: () => void; open: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void; onAddSubcategory: () => void; onEditSubcategory: (subcategory: CatalogSubcategory) => void; onDeleteSubcategory: (subcategory: CatalogSubcategory) => void; onAddService: (subcategory: CatalogSubcategory) => void; onEditService: (subcategory: CatalogSubcategory, service: CatalogItem) => void; onToggleService: (subcategory: CatalogSubcategory, service: CatalogItem) => void; onDeleteService: (categoryId: string, subcategoryId: string, service: CatalogItem) => void }) {
   const services = category.subcategories.reduce((sum, subcategory) => sum + subcategory.items.length, 0);
   return <section className="overflow-hidden rounded-2xl border border-[#e3d8c9] bg-[#fffdf8] shadow-[0_14px_40px_rgba(98,67,36,.045)]" data-testid={`card-category-${category.id}`}>
-    <div className="flex items-start gap-3 p-4 sm:items-center sm:p-5"><button type="button" onClick={onToggle} className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#f2e8d3] text-[#864936]" aria-expanded={open} data-testid={`button-toggle-category-${category.id}`}>{open ? <ChevronDown size={19} /> : <ChevronRight size={19} />}</button><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-serif text-xl font-semibold text-[#263b31]" data-testid={`text-category-name-${category.id}`}>{category.name}</h2><span className="count-pill" data-testid={`text-category-service-count-${category.id}`}>{services} services</span></div><p className="mt-1 text-sm text-[#7a776e]" data-testid={`text-category-description-${category.id}`}>{category.description || 'No category description yet.'}</p></div><div className="flex shrink-0 gap-1"><button type="button" onClick={onEdit} className="icon-button" aria-label={`Edit ${category.name}`} data-testid={`button-edit-category-${category.id}`}><Pencil size={16} /></button><button type="button" onClick={onDelete} className="icon-button danger-hover" aria-label={`Delete ${category.name}`} data-testid={`button-delete-category-${category.id}`}><Trash2 size={16} /></button></div></div>
+    <div className="flex items-start gap-3 p-4 sm:items-center sm:p-5"><button type="button" onClick={onToggle} className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#f2e8d3] text-[#864936]" aria-expanded={open} data-testid={`button-toggle-category-${category.id}`}>{open ? <ChevronDown size={19} /> : <ChevronRight size={19} />}</button><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-serif text-xl font-semibold text-[#263b31]" data-testid={`text-category-name-${category.id}`}>{category.name}</h2><span className="count-pill" data-testid={`text-category-service-count-${category.id}`}>{services} services</span></div><p className="mt-1 text-sm text-[#7a776e]" data-testid={`text-category-description-${category.id}`}>{category.description || 'No category description yet.'}</p></div><div className="flex shrink-0 gap-1"><button type="button" onClick={onMoveUp} disabled={!canMoveUp} className="icon-button disabled:opacity-30" aria-label={`Move ${category.name} up`} title="Move up" data-testid={`button-move-up-${category.id}`}><ArrowUp size={16} /></button><button type="button" onClick={onMoveDown} disabled={!canMoveDown} className="icon-button disabled:opacity-30" aria-label={`Move ${category.name} down`} title="Move down" data-testid={`button-move-down-${category.id}`}><ArrowDown size={16} /></button><button type="button" onClick={onEdit} className="icon-button" aria-label={`Edit ${category.name}`} data-testid={`button-edit-category-${category.id}`}><Pencil size={16} /></button><button type="button" onClick={onDelete} className="icon-button danger-hover" aria-label={`Delete ${category.name}`} data-testid={`button-delete-category-${category.id}`}><Trash2 size={16} /></button></div></div>
     {open && <div className="border-t border-[#eee6d9] bg-[#fcf8f0] px-3 pb-3 sm:px-5 sm:pb-5"><div className="flex items-center justify-between gap-3 py-4"><span className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[#9a5b47]">Service groups</span><button type="button" onClick={onAddSubcategory} className="admin-link" data-testid={`button-add-subcategory-${category.id}`}><Plus size={15} /> Add group</button></div>{category.subcategories.length === 0 ? <div className="rounded-xl border border-dashed border-[#d9cbb9] bg-[#fffdf8] px-4 py-7 text-center" data-testid={`empty-subcategories-${category.id}`}><p className="text-sm font-semibold text-[#47564c]">No service groups in this category</p><p className="mt-1 text-xs text-[#88847b]">Add a group before adding services.</p></div> : <div className="space-y-3">{category.subcategories.map((subcategory) => <SubcategoryRow key={subcategory.id} categoryId={category.id} subcategory={subcategory} onEdit={() => onEditSubcategory(subcategory)} onDelete={() => onDeleteSubcategory(subcategory)} onAddService={() => onAddService(subcategory)} onEditService={(service) => onEditService(subcategory, service)} onToggleService={(service) => onToggleService(subcategory, service)} onDeleteService={(service) => onDeleteService(category.id, subcategory.id, service)} />)}</div>}</div>}
   </section>;
 }

@@ -71,7 +71,7 @@ export function OccupancyCalendar({ quotes, onOpenQuote }: { quotes: Quote[]; on
         <span className="flex items-center gap-2"><i className="inline-block h-3 w-5 rounded-sm bg-[#864936]" /> Booked</span>
         <span className="flex items-center gap-2"><i className="inline-block h-3 w-5 rounded-sm" style={STRIPE} /> Enquiry (saved, not booked)</span>
         <span className="flex items-center gap-2"><i className="inline-block h-3 w-5 rounded-sm bg-[#eee6d9]" /> Free</span>
-        <span className="text-[#8b887f]">M = Morning · A = Afternoon · E = Evening · N = Night</span>
+        <span className="text-[#8b887f]">M = Morning (8 AM – 2 PM) · E = Evening (4 PM – 11 PM)</span>
         <label className="ml-auto flex cursor-pointer items-center gap-2 font-semibold">
           <input type="checkbox" checked={showEnquiries} onChange={(e) => setShowEnquiries(e.target.checked)} className="size-4 accent-[#864936]" data-testid="input-show-enquiries" />
           Show enquiries
@@ -103,7 +103,7 @@ export function OccupancyCalendar({ quotes, onOpenQuote }: { quotes: Quote[]; on
                     <span className={`text-sm font-bold ${iso === todayISO ? 'grid size-6 place-items-center rounded-full bg-[#263b31] text-white' : 'text-[#263b31]'}`}>{Number(iso.slice(8))}</span>
                     {list.length > 0 && <span className="text-[10px] font-bold text-[#864936]">{list.length}</span>}
                   </span>
-                  <span className="mt-1.5 grid grid-cols-4 gap-0.5">
+                  <span className="mt-1.5 grid grid-cols-2 gap-0.5">
                     {SLOTS.map((slot) => {
                       const state = slotState(list, slot.id);
                       return (
@@ -137,7 +137,7 @@ export function OccupancyCalendar({ quotes, onOpenQuote }: { quotes: Quote[]; on
         <div className="mt-4 rounded-xl border border-[#d8cbb9] bg-[#f8f2e7] p-4" data-testid="panel-calendar-day">
           <h3 className="font-serif text-lg font-semibold text-[#263b31]">{formatEventDates([selectedDay])}</h3>
           {selectedEntries.length === 0 ? (
-            <p className="mt-2 text-sm text-[#5f655e]">Nothing on this date. All four slots are free.</p>
+            <p className="mt-2 text-sm text-[#5f655e]">Nothing on this date. Both slots are free.</p>
           ) : (
             <>
               <div className="mt-3 divide-y divide-[#e5dac8]">

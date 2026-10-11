@@ -1,4 +1,4 @@
-import type { EventSlots, SlotId } from '@/lib/booking';
+import { normalizeSlots, type EventSlots, type SlotId } from '@/lib/booking';
 import {
   useMutation,
   useQuery,
@@ -232,7 +232,7 @@ export function useBookedSlots() {
       if (error) throw error;
       const map: Record<string, SlotId[]> = {};
       ((data ?? []) as { booked_date: string; booked_slots: SlotId[] }[]).forEach((row) => {
-        map[row.booked_date] = Array.from(new Set([...(map[row.booked_date] ?? []), ...row.booked_slots]));
+        map[row.booked_date] = Array.from(new Set([...(map[row.booked_date] ?? []), ...normalizeSlots(row.booked_slots)]));
       });
       return map;
     },

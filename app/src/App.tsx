@@ -566,10 +566,10 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
                   <button type="button" onClick={() => toggleDate(date)} aria-label={`Remove ${displayDate(date)}`} className="grid size-6 place-items-center rounded-full bg-[#864936] text-sm font-bold leading-none text-white" data-testid={`button-remove-date-${date}`}>×</button>
                 </div>
                 <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#8b887f]">Time slot</p>
-                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <button type="button" disabled={taken.length > 0} onClick={() => toggleEntireDay(date)} aria-pressed={entire} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${taken.length > 0 ? 'cursor-not-allowed border-[#eadfd2] bg-[#f1ece4] text-[#aaa397]' : entire ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-entire`}>
                     Entire day
-                    <span className="mt-0.5 block text-[10px] font-medium opacity-80">{taken.length > 0 ? 'Not available' : 'All 4 slots'}</span>
+                    <span className="mt-0.5 block text-[10px] font-medium opacity-80">{taken.length > 0 ? 'Not available' : `All ${ALL_SLOT_IDS.length} slots`}</span>
                   </button>
                   {SLOTS.map((slot) => {
                     const on = chosen.includes(slot.id);
@@ -582,7 +582,7 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
                     );
                   })}
                 </div>
-                <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>{chosen.length ? slotText(chosen) : 'Pick one or more slots, e.g. Morning + Afternoon.'}</p>
+                <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>{chosen.length ? slotText(chosen) : 'Pick one or more slots, e.g. Morning + Evening.'}</p>
                 {taken.length > 0 && <p className="mt-1 text-xs font-semibold text-[#b0675a]" data-testid={`text-occupied-${date}`}>Already booked on this date: {slotText(taken, false)}</p>}
                 {clash.length > 0 && <p className="mt-1 text-xs font-bold text-[#a13d32]">{slotText(clash, false)} is no longer free. Please change the time.</p>}
               </div>
@@ -977,7 +977,7 @@ function EstimatorPage() {
         if (typeof draft.hallGstNumber === 'string') setHallGstNumber(draft.hallGstNumber.slice(0, 15));
         if (typeof draft.gstNumberVisible === 'boolean') setGstNumberVisible(draft.gstNumberVisible);
          if (typeof draft.customerGstNumberVisible === 'boolean') setCustomerGstNumberVisible(draft.customerGstNumberVisible);
-        if (draft.eventSlots && typeof draft.eventSlots === 'object') setEventSlots(draft.eventSlots);
+        if (draft.eventSlots && typeof draft.eventSlots === 'object') setEventSlots(Object.fromEntries(Object.entries(draft.eventSlots).map(([date, list]) => [date, sortSlots(list as string[])])));
         if (typeof draft.showCostPerGuest === 'boolean') setShowCostPerGuest(draft.showCostPerGuest);
         if (typeof draft.discountEnabled === 'boolean') setDiscountEnabled(draft.discountEnabled);
         if (typeof draft.discountPercent === 'string') setDiscountPercent(draft.discountPercent);

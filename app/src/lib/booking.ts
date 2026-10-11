@@ -1,23 +1,36 @@
 // Time slots for hall bookings, shared by the estimator and the admin panel.
-export type SlotId = 'morning' | 'afternoon' | 'evening' | 'night';
+export type SlotId = 'morning' | 'evening';
 export type EventSlots = Record<string, SlotId[]>;
 
 export const SLOTS: { id: SlotId; label: string; letter: string; start: string; end: string }[] = [
-  { id: 'morning', label: 'Morning', letter: 'M', start: '5:00 AM', end: '12:00 PM' },
-  { id: 'afternoon', label: 'Afternoon', letter: 'A', start: '12:00 PM', end: '5:00 PM' },
-  { id: 'evening', label: 'Evening', letter: 'E', start: '5:00 PM', end: '9:00 PM' },
-  { id: 'night', label: 'Night', letter: 'N', start: '9:00 PM', end: '4:00 AM' },
+  { id: 'morning', label: 'Morning', letter: 'M', start: '8:00 AM', end: '2:00 PM' },
+  { id: 'evening', label: 'Evening', letter: 'E', start: '4:00 PM', end: '11:00 PM' },
 ];
+
+// Bills saved before the slots were changed used four slots (morning/afternoon/evening/night).
+// They are mapped to the two current slots; "afternoon" overlaps both, so it blocks both (safe against double booking).
+const LEGACY_SLOTS: Record<string, SlotId[]> = {
+  morning: ['morning'],
+  afternoon: ['morning', 'evening'],
+  evening: ['evening'],
+  night: ['evening'],
+};
+
+export function normalizeSlots(slots: readonly string[] | undefined): SlotId[] {
+  const result = new Set<SlotId>();
+  (slots ?? []).forEach((slot) => (LEGACY_SLOTS[slot] ?? []).forEach((id) => result.add(id)));
+  return Array.from(result);
+}
 
 export const ALL_SLOT_IDS: SlotId[] = SLOTS.map((slot) => slot.id);
 
-export function sortSlots(slots: SlotId[] | undefined): SlotId[] {
-  const wanted = new Set(slots ?? []);
+export function sortSlots(slots: readonly string[] | undefined): SlotId[] {
+  const wanted = new Set(normalizeSlots(slots));
   return ALL_SLOT_IDS.filter((id) => wanted.has(id));
 }
 
 // "Morning to Afternoon (5:00 AM – 5:00 PM)", "Entire day", "Morning + Night" ...
-export function slotText(slots: SlotId[] | undefined, withTimes = true): string {
+export function slotText(slots: readonly string[] | undefined, withTimes = true): string {
   const sorted = sortSlots(slots);
   if (!sorted.length) return 'Time not selected';
   const indexes = sorted.map((id) => ALL_SLOT_IDS.indexOf(id));
@@ -44,7 +57,7 @@ export function scheduleLines(dates: string[], slots: EventSlots | undefined): S
 }
 
 export function hasAnySlots(slots: EventSlots | undefined): boolean {
-  return Boolean(slots && Object.values(slots).some((list) => list && list.length));
+  return Boolean(slots && Object.values(slots).some((list) => list && sortSlots(list).length));
 }
 
 // Older saved bills have no time slots: treat them as holding the whole day, flagged as "time not set".
