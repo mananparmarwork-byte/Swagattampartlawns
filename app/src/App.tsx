@@ -42,6 +42,7 @@ import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog'
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
 import { ClockTimePicker } from '@/components/clock-time-picker';
+import { PrintBill, type PrintBillData } from '@/components/print-bill';
 import { durationText, formatTime, fromMinutes, hasAnySlots, isFullDayBooked, isRangeComplete, isRangeValid, normalizeEventSlots, normalizeRange, occupancyEntries, rangesOverlap, rangesText, scheduleLines, timeText, toMinutes, type EventSlots, type TimeRange } from '@/lib/booking';
 
 const EVENT_TYPES = ['Wedding', 'Reception', 'Engagement', 'Birthday', 'Anniversary', 'Corporate', 'Other'];
@@ -49,7 +50,6 @@ const BANQUET_NAME = 'Swagattam Party Lawns';
 const INITIAL_DETAILS = { name: '', mobile: '', eventType: '', otherEventType: '', eventDate: '', guests: '150', billNumber: '', customerGstNumber: '' };
 const DRAFT_STORAGE_KEY = 'swagattam-banquet-estimate';
 // Print only: show each item's description under its name. Set to true to also show it for Food & Catering items.
-const SHOW_DESCRIPTION_FOR_FOOD = false;
 const BRAND_LOGO = `${import.meta.env.BASE_URL}swagattam-logo.webp`;
 
 type Details = typeof INITIAL_DETAILS;
@@ -88,7 +88,6 @@ const localISODate = (date: Date) => `${date.getFullYear()}-${String(date.getMon
 const displayEventDates = (value: string) => formatEventDates(parseEventDates(value));
 const displayDate = (date: string) => (date ? new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not selected');
 const displayEventType = (details: Details) => details.eventType === 'Other' ? details.otherEventType.trim() || 'Other' : details.eventType;
-const BILL_NOTE = 'This is an auto-generated bill and does not require any signature or stamp. It is electronically generated and is valid without a physical signature or company stamp.';
 
 function advanceMessage(pricing: { grandTotal: number; advancePaid?: boolean; advanceAmount?: number }) {
   const advance = quoteAdvance(pricing);
@@ -874,67 +873,35 @@ function SummaryDetail({ label, value }: { label: string; value: string }) {
   return <div data-testid={`summary-detail-${label.toLowerCase()}`}><span className="block text-[10px] uppercase tracking-[0.12em] text-[#9fa99e]">{label}</span><span className="mt-1 block truncate font-medium text-[#f7f0e2]">{value}</span></div>;
 }
 
-function PrintServiceTable({ title, lines, details, showLineTotal = true, showDescription = true }: { title: string; lines: PrintableLine[]; details: Details; showLineTotal?: boolean; showDescription?: boolean }) {
-  return (
-    <section className="print-service-section">
-      <h2 className="mb-2 text-lg font-semibold text-[#263b31]">{title}</h2>
-      <table className="print-table">
-        <thead><tr><th>Category / subcategory</th><th>Item</th><th>Qty</th><th>Rate</th>{showLineTotal && <th>Total</th>}</tr></thead>
-        <tbody>
-          {lines.map((line) => <tr key={line.id}><td>{line.categoryName}<span className="print-subcategory">{line.subcategoryName}</span></td><td>{line.name}{showDescription && line.description.trim() && <span className="print-item-description">{line.description}</span>}</td><td>{line.pricingType === 'perPerson' ? `${numberFormat(Number(details.guests))} guests` : line.quantity}</td><td>{currency(line.price)} {serviceRateLabel(line.pricingType)}</td>{showLineTotal && <td>{currency(line.total)}</td>}</tr>)}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
 function PrintSheet({ catalog, printData }: { catalog: Category[]; printData: PrintData | null }) {
   if (!printData) return null;
-  const { details, lines, categoryTotals, foodPerPlate, subtotal, gstEnabled, gstRate, gstAmount, gstNumber, gstNumberVisible, customerGstNumberVisible, discountAmount, discountLabel, grandTotal, costPerGuest, showCostPerGuest, eventSlots, billNumber, advanceAmount, balanceDue } = printData;
-  const foodLines = lines.filter((line) => line.categoryId === 'food');
-  const otherLines = lines.filter((line) => line.categoryId !== 'food');
-  return (
-    <main className="print-sheet">
-       <div className="print-header flex items-center justify-between gap-6">
-         <div className="flex items-center gap-3"><img src={BRAND_LOGO} alt={`${BANQUET_NAME} logo`} className="print-logo" /><div><p className="print-label">Event estimate studio</p><h1 className="mt-1 text-3xl font-semibold text-[#864936]">{BANQUET_NAME}</h1><p className="mt-1 text-xs text-[#6e6a61]">Celebrations, held beautifully.</p></div></div>
-         <div className="text-right"><p className="print-label">Prepared on</p><strong className="text-xs">{displayDate(new Date().toISOString().split('T')[0])}</strong><p className="mt-2 print-label">Bill No</p><strong className="text-xs">{billNumber || '—'}</strong></div>
-      </div>
-       <section className="print-inquiry">
-         <h2>Inquiry details</h2>
-         <div className="print-inquiry-grid">
-           <div><span>Customer</span><strong>{details.name || '—'}</strong></div>
-           <div><span>Mobile</span><strong>{details.mobile || '—'}</strong></div>
-           <div><span>Event</span><strong>{displayEventType(details) || '—'}</strong></div>
-           <div><span>{parseEventDates(details.eventDate).length > 1 ? 'Dates' : 'Date'}</span><strong>{displayEventDates(details.eventDate)}</strong></div>
-           <div><span>Guests</span><strong>{details.guests ? numberFormat(Number(details.guests)) : '—'}</strong></div>
-           <div><span>GST</span><strong>{gstEnabled ? `${gstRate}%` : 'Not applied'}</strong></div>
-           {gstNumberVisible && gstNumber.trim() && <div><span>Hall GST number</span><strong>{gstNumber}</strong></div>}
-           {customerGstNumberVisible && details.customerGstNumber.trim() && <div><span>Customer GST number</span><strong>{details.customerGstNumber}</strong></div>}
-         </div>
-         {hasAnySlots(eventSlots) && (
-           <div className="print-schedule">
-             <span>Date &amp; time</span>
-             {scheduleLines(parseEventDates(details.eventDate), eventSlots).map((line) => <p key={line.date}><strong>{formatEventDates([line.date])}</strong> — {line.text}</p>)}
-           </div>
-         )}
-       </section>
-      {foodLines.length > 0 && <PrintServiceTable title="Food & Catering" lines={foodLines} details={details} showLineTotal={false} showDescription={SHOW_DESCRIPTION_FOR_FOOD} />}
-      {otherLines.length > 0 && <PrintServiceTable title="Additional services" lines={otherLines} details={details} />}
-      {!lines.length && <p className="mb-2 text-sm text-[#6e6a61]">No additional services selected.</p>}
-      <div className="print-totals">
-        {catalog.filter((category) => categoryTotals[category.id] > 0).map((category) => <div className="print-total-row" key={category.id}><span>{category.name}</span><strong>{currency(categoryTotals[category.id])}</strong></div>)}
-        {foodPerPlate > 0 && <div className="print-total-row"><span>Food price / plate</span><strong>{currency(foodPerPlate)}</strong></div>}
-        <div className="print-total-row"><span>Subtotal</span><strong>{currency(subtotal)}</strong></div>
-        {discountAmount > 0 && <div className="print-total-row"><span>{discountLabel}</span><strong>− {currency(discountAmount)}</strong></div>}
-        {gstEnabled && <div className="print-total-row"><span>GST ({gstRate}%)</span><strong>{currency(gstAmount)}</strong></div>}
-        <div className="print-total-row print-grand"><span>Grand total</span><strong>{currency(grandTotal)}</strong></div>
-        {advanceAmount > 0 && <div className="print-total-row"><span>Advance paid</span><strong>− {currency(advanceAmount)}</strong></div>}
-        {advanceAmount > 0 && <div className="print-total-row print-balance"><span>{balanceDue <= 0 ? 'Fully paid' : 'Balance to pay'}</span><strong>{currency(balanceDue)}</strong></div>}
-        {showCostPerGuest && <div className="print-total-row"><span>Cost per guest</span><strong>{currency(costPerGuest)}</strong></div>}
-      </div>
-       <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
-    </main>
-  );
+  const d = printData;
+  const data: PrintBillData = {
+    billNumber: d.billNumber,
+    customerName: d.details.name,
+    mobile: d.details.mobile,
+    eventType: displayEventType(d.details),
+    dates: parseEventDates(d.details.eventDate),
+    eventSlots: d.eventSlots,
+    guests: Number(d.details.guests) || 0,
+    gstEnabled: d.gstEnabled,
+    gstRate: d.gstRate,
+    gstAmount: d.gstAmount,
+    hallGstNumber: d.gstNumberVisible ? d.gstNumber : '',
+    customerGstNumber: d.customerGstNumberVisible ? d.details.customerGstNumber : '',
+    lines: d.lines.map((line) => ({ id: line.id, isFood: line.categoryId === 'food', category: line.categoryName, subcategory: line.subcategoryName, name: line.name, description: line.description, pricingType: line.pricingType, quantity: line.quantity, price: line.price, total: line.total })),
+    categoryTotals: catalog.filter((category) => (d.categoryTotals[category.id] ?? 0) > 0).map((category) => ({ name: category.name, total: d.categoryTotals[category.id] })),
+    foodPerPlate: d.foodPerPlate,
+    subtotal: d.subtotal,
+    discountAmount: d.discountAmount,
+    discountLabel: d.discountLabel,
+    grandTotal: d.grandTotal,
+    advanceAmount: d.advanceAmount,
+    balanceDue: d.balanceDue,
+    costPerGuest: d.costPerGuest,
+    showCostPerGuest: d.showCostPerGuest,
+  };
+  return <PrintBill data={data} />;
 }
 
 function EstimatorPage() {

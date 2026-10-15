@@ -20,6 +20,7 @@ import {
   quotePaymentState,
 } from '@/lib/supabase-queries';
 import { findConflicts, hasAnySlots, scheduleLines, timeText } from '@/lib/booking';
+import { PrintBill, type PrintBillData } from '@/components/print-bill';
 import { OccupancyCalendar } from '@/components/occupancy-calendar';
 import { PaymentBadge, PaymentPanel } from '@/components/payment-panel';
 import { OPEN_SETTINGS_EVENT, PaymentSettingsSection } from '@/components/payment-settings';
@@ -41,7 +42,6 @@ type ModalState =
 
 const makeId = (prefix: string, name: string) => `${prefix}-${name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'new'}-${Date.now().toString(36)}`;
 const money = (amount: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
-const BILL_NOTE = 'This is an auto-generated bill and does not require any signature or stamp. It is electronically generated and is valid without a physical signature or company stamp.';
 const BRAND_LOGO = `${import.meta.env.BASE_URL}swagattam-logo.webp`;
 
 function isFoodService(category: string) {
@@ -54,76 +54,43 @@ function serviceRateLabel(pricingType: Quote['services'][number]['pricingType'])
   return 'one-time';
 }
 
-function SavedQuotePrintTable({ title, services, guests, showLineTotal, showDescription = true }: { title: string; services: Quote['services']; guests: number; showLineTotal: boolean; showDescription?: boolean }) {
-  return (
-    <section className="print-service-section">
-      <h2 className="mb-2 text-lg font-semibold text-[#263b31]">{title}</h2>
-      <table className="print-table">
-        <thead><tr><th>Category / subcategory</th><th>Item</th><th>Qty</th><th>Rate</th>{showLineTotal && <th>Total</th>}</tr></thead>
-        <tbody>
-          {services.map((service) => <tr key={service.id}>
-            <td>{service.category}<span className="print-subcategory">{service.subcategory}</span></td>
-            <td>{service.name}{showDescription && service.description?.trim() && <span className="print-item-description">{service.description}</span>}</td>
-            <td>{service.pricingType === 'perPerson' ? `${guests.toLocaleString('en-IN')} guests` : service.quantity}</td>
-            <td>{money(service.unitPrice)} {serviceRateLabel(service.pricingType)}</td>
-            {showLineTotal && <td>{money(service.total)}</td>}
-          </tr>)}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
 function SavedQuotePrintSheet({ quote }: { quote: Quote | null }) {
   if (!quote) return null;
-  const foodServices = quote.services.filter((service) => isFoodService(service.category));
-  const otherServices = quote.services.filter((service) => !isFoodService(service.category));
-  const foodTotal = foodServices.reduce((sum, service) => sum + service.total, 0);
-  const otherTotal = otherServices.reduce((sum, service) => sum + service.total, 0);
-  return (
-    <main className="print-sheet">
-      <div className="print-header flex items-center justify-between gap-6">
-        <div className="flex items-center gap-3"><img src={BRAND_LOGO} alt="Swagattam logo" className="print-logo" /><div><p className="print-label">Event estimate studio</p><h1 className="mt-1 text-3xl font-semibold text-[#864936]">Swagattam</h1><p className="mt-1 text-xs text-[#6e6a61]">Celebrations, held beautifully.</p></div></div>
-        <div className="text-right"><p className="print-label">Prepared on</p><strong className="text-xs">{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong><p className="mt-2 print-label">Bill No</p><strong className="text-xs">{quote.reference}</strong></div>
-      </div>
-      <section className="print-inquiry">
-        <h2>Inquiry details</h2>
-        <div className="print-inquiry-grid">
-          <div><span>Customer</span><strong>{quote.customer.name}</strong></div>
-          <div><span>Mobile</span><strong>{quote.customer.mobile}</strong></div>
-          <div><span>Event</span><strong>{quote.customer.eventType}</strong></div>
-          <div><span>Date</span><strong>{formatEventDates(quoteEventDates(quote.customer))}</strong></div>
-          <div><span>Guests</span><strong>{quote.customer.guests.toLocaleString('en-IN')}</strong></div>
-          <div><span>GST</span><strong>{quote.pricing.gstEnabled ? `${quote.pricing.gstRate}%` : 'Not applied'}</strong></div>
-          {quote.customer.gstNumber && <div><span>Customer GST number</span><strong>{quote.customer.gstNumber}</strong></div>}
-        </div>
-        {hasAnySlots(quote.customer.eventSlots) && (
-          <div className="print-schedule">
-            <span>Date &amp; time</span>
-            {scheduleLines(quoteEventDates(quote.customer), quote.customer.eventSlots).map((line) => <p key={line.date}><strong>{formatEventDates([line.date])}</strong> — {line.text}</p>)}
-          </div>
-        )}
-      </section>
-      {foodServices.length > 0 && <SavedQuotePrintTable title="Food & Catering" services={foodServices} guests={quote.customer.guests} showLineTotal={false} showDescription={false} />}
-      {otherServices.length > 0 && <SavedQuotePrintTable title="Additional services" services={otherServices} guests={quote.customer.guests} showLineTotal />}
-      {!quote.services.length && <p className="mb-2 text-sm text-[#6e6a61]">No additional services selected.</p>}
-      <div className="print-totals">
-        {foodTotal > 0 && <div className="print-total-row"><span>Food & Catering</span><strong>{money(foodTotal)}</strong></div>}
-        {otherTotal > 0 && <div className="print-total-row"><span>Additional services</span><strong>{money(otherTotal)}</strong></div>}
-        {quote.pricing.foodPerPlate > 0 && <div className="print-total-row"><span>Food price / plate</span><strong>{money(quote.pricing.foodPerPlate)}</strong></div>}
-        <div className="print-total-row"><span>Subtotal</span><strong>{money(quote.pricing.subtotal)}</strong></div>
-        {quote.pricing.discountEnabled && (quote.pricing.discountAmount ?? 0) > 0 && <div className="print-total-row"><span>Discount{(quote.pricing.discountPercent ?? 0) > 0 || (quote.pricing.discountFlat ?? 0) > 0 ? ` (${[(quote.pricing.discountPercent ?? 0) > 0 ? `${quote.pricing.discountPercent}%` : '', (quote.pricing.discountFlat ?? 0) > 0 ? money(quote.pricing.discountFlat ?? 0) : ''].filter(Boolean).join(' + ')})` : ''}</span><strong>− {money(quote.pricing.discountAmount ?? 0)}</strong></div>}
-        {quote.pricing.gstEnabled && <div className="print-total-row"><span>GST ({quote.pricing.gstRate}%)</span><strong>{money(quote.pricing.gstAmount)}</strong></div>}
-        <div className="print-total-row print-grand"><span>Grand total</span><strong>{money(quote.pricing.grandTotal)}</strong></div>
-        {quoteAdvance(quote.pricing).paid && <div className="print-total-row"><span>Advance paid</span><strong>− {money(quoteAdvance(quote.pricing).amount)}</strong></div>}
-        {quoteAdvance(quote.pricing).paid && <div className="print-total-row print-balance"><span>{quoteAdvance(quote.pricing).balance <= 0 ? 'Fully paid' : 'Balance to pay'}</span><strong>{money(quoteAdvance(quote.pricing).balance)}</strong></div>}
-        {quote.pricing.showCostPerGuest !== false && <div className="print-total-row"><span>Cost per guest</span><strong>{money(quote.pricing.costPerGuest)}</strong></div>}
-      </div>
-      <div className="print-notes"><strong>Notes & terms</strong><br />{BILL_NOTE}</div>
-    </main>
-  );
+  const advance = quoteAdvance(quote.pricing);
+  const pr = quote.pricing;
+  const totals: { name: string; total: number }[] = [];
+  quote.services.forEach((service) => {
+    const row = totals.find((item) => item.name === service.category);
+    if (row) row.total += service.total; else totals.push({ name: service.category, total: service.total });
+  });
+  const discountParts = [(pr.discountPercent ?? 0) > 0 ? `${pr.discountPercent}%` : '', (pr.discountFlat ?? 0) > 0 ? money(pr.discountFlat ?? 0) : ''].filter(Boolean);
+  const data: PrintBillData = {
+    billNumber: quote.reference,
+    customerName: quote.customer.name,
+    mobile: quote.customer.mobile,
+    eventType: quote.customer.eventType,
+    dates: quoteEventDates(quote.customer),
+    eventSlots: quote.customer.eventSlots,
+    guests: quote.customer.guests,
+    gstEnabled: pr.gstEnabled,
+    gstRate: pr.gstRate,
+    gstAmount: pr.gstAmount,
+    hallGstNumber: pr.gstNumberVisible ? pr.gstNumber : '',
+    customerGstNumber: quote.customer.gstNumber ?? '',
+    lines: quote.services.map((service) => ({ id: service.id, isFood: isFoodService(service.category), category: service.category, subcategory: service.subcategory, name: service.name, description: service.description ?? '', pricingType: service.pricingType, quantity: service.quantity, price: service.unitPrice, total: service.total })),
+    categoryTotals: totals,
+    foodPerPlate: pr.foodPerPlate,
+    subtotal: pr.subtotal,
+    discountAmount: pr.discountEnabled ? pr.discountAmount ?? 0 : 0,
+    discountLabel: discountParts.length ? `Discount (${discountParts.join(' + ')})` : 'Discount',
+    grandTotal: pr.grandTotal,
+    advanceAmount: advance.paid ? advance.amount : 0,
+    balanceDue: advance.balance,
+    costPerGuest: pr.costPerGuest,
+    showCostPerGuest: pr.showCostPerGuest !== false,
+  };
+  return <PrintBill data={data} />;
 }
-
 
 // ---- Monthly grouping and the "Print all enquiries" report ----
 const monthKeyOf = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };

@@ -186,3 +186,21 @@ export function findConflicts(
   });
   return conflicts;
 }
+
+const EVENT_TYPE_LABELS = ['wedding', 'reception', 'engagement', 'birthday', 'anniversary', 'corporate'];
+const looseKey = (value: string) => value.toLowerCase().replace(/[^a-z]/g, '').replace(/s/g, '');
+
+/**
+ * Subcategory line shown under the category on a printed bill.
+ * Hidden when it would only confuse: it names a different event type (e.g. "Engagement"
+ * on a Corporate bill) or it just repeats the category ("Packages For Banquet Hall" /
+ * "Package For Banquet Hall").
+ */
+export function printableSubcategory(subcategory: string | undefined | null, eventType: string | undefined | null, category?: string | null) {
+  const sub = (subcategory ?? '').trim();
+  if (!sub) return '';
+  const subKey = sub.toLowerCase();
+  if (EVENT_TYPE_LABELS.includes(subKey) && subKey !== (eventType ?? '').trim().toLowerCase()) return '';
+  if (category && looseKey(category) === looseKey(sub)) return '';
+  return sub;
+}
