@@ -1,0 +1,15 @@
+{
+  "name": "swagattam-reviews-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/worker.test.mjs",
+    "get-token": "node scripts/get-refresh-token.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

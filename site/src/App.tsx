@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { siteConfig } from './siteConfig';
+import { GoogleReviews } from '@/components/google-reviews';
 
 const queryClient = new QueryClient();
 const media = (folder: string, file: string) =>
@@ -1301,6 +1302,7 @@ function Home() {
         <InstagramSection />
         <Facilities />
         <Testimonial />
+        <GoogleReviews />
         <ContactSection onCall={() => setCallInfoOpen(true)} />
       </main>
       <Footer onEnquire={() => setEnquiryOpen(true)} onCall={() => setCallInfoOpen(true)} />

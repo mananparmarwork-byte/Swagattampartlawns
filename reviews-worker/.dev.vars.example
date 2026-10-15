@@ -1,0 +1,12 @@
+# Copy to .dev.vars for local `wrangler dev`. NEVER commit .dev.vars.
+SYNC_TOKEN=pick-a-long-random-string
+
+# --- Option A: Google Business Profile API (full reviews; needs Google's approval) ---
+GBP_CLIENT_ID=
+GBP_CLIENT_SECRET=
+GBP_REFRESH_TOKEN=
+GBP_ACCOUNT_ID=
+GBP_LOCATION_ID=
+
+# --- Option B: Places API (New) (max 5 reviews; works today) ---
+PLACES_API_KEY=
