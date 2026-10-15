@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { siteConfig } from './siteConfig';
+import { GoogleReviews } from './components/GoogleReviews';
 
 const queryClient = new QueryClient();
 const media = (folder: string, file: string) =>
@@ -1302,6 +1303,7 @@ function Home() {
         <Facilities />
         <Testimonial />
         <ContactSection onCall={() => setCallInfoOpen(true)} />
+        <GoogleReviews />
       </main>
       <Footer onEnquire={() => setEnquiryOpen(true)} onCall={() => setCallInfoOpen(true)} />
       <div className="floating-actions">

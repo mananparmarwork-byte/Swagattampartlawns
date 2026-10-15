@@ -41,7 +41,8 @@ import type { Quote } from '@/lib/supabase-queries';
 import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
-import { durationText, formatTime, hasAnySlots, isFullDayBooked, isRangeComplete, isRangeValid, normalizeEventSlots, normalizeRange, occupancyEntries, rangesOverlap, rangesText, scheduleLines, timeText, type EventSlots, type TimeRange } from '@/lib/booking';
+import { ClockTimePicker } from '@/components/clock-time-picker';
+import { durationText, formatTime, fromMinutes, hasAnySlots, isFullDayBooked, isRangeComplete, isRangeValid, normalizeEventSlots, normalizeRange, occupancyEntries, rangesOverlap, rangesText, scheduleLines, timeText, toMinutes, type EventSlots, type TimeRange } from '@/lib/booking';
 
 const EVENT_TYPES = ['Wedding', 'Reception', 'Engagement', 'Birthday', 'Anniversary', 'Corporate', 'Other'];
 const BANQUET_NAME = 'Swagattam Party Lawns';
@@ -579,14 +580,14 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
                 </div>
                 <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#8b887f]">Party plot booking time</p>
                 <div className="mt-1.5 grid grid-cols-2 gap-2">
-                  <label className="block">
+                  <div className="block">
                     <span className="mb-1 block text-[11px] font-bold text-[#5f655e]">From</span>
-                    <input type="time" value={chosen.start} onChange={(e) => setTime(date, 'start', e.target.value)} className={`field-control h-11 w-full rounded-xl px-3 text-sm font-semibold ${clash.length ? 'border-[#d9958a]' : ''}`} aria-label={`Booking start time on ${displayDate(date)}`} data-testid={`input-time-start-${date}`} />
-                  </label>
-                  <label className="block">
+                    <ClockTimePicker value={chosen.start} onChange={(time) => setTime(date, 'start', time)} invalid={clash.length > 0} title={`Start time · ${displayDate(date)}`} defaultValue="18:00" ariaLabel={`Booking start time on ${displayDate(date)}`} testId={`input-time-start-${date}`} />
+                  </div>
+                  <div className="block">
                     <span className="mb-1 block text-[11px] font-bold text-[#5f655e]">Till</span>
-                    <input type="time" value={chosen.end} onChange={(e) => setTime(date, 'end', e.target.value)} className={`field-control h-11 w-full rounded-xl px-3 text-sm font-semibold ${clash.length ? 'border-[#d9958a]' : ''}`} aria-label={`Booking end time on ${displayDate(date)}`} data-testid={`input-time-end-${date}`} />
-                  </label>
+                    <ClockTimePicker value={chosen.end} onChange={(time) => setTime(date, 'end', time)} invalid={clash.length > 0} endOfDay title={`End time · ${displayDate(date)}`} defaultValue={fromMinutes(Math.min(23 * 60 + 59, (toMinutes(chosen.start) ?? 17 * 60) + 60))} ariaLabel={`Booking end time on ${displayDate(date)}`} testId={`input-time-end-${date}`} />
+                  </div>
                 </div>
                 <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>
                   {valid ? `${timeText(chosen)} · ${durationText(chosen)}` : complete ? 'The end time must be after the start time.' : 'Tap the clock and choose when the booking starts and when it ends.'}
@@ -1352,7 +1353,7 @@ function EstimatorPage() {
           </div>
         </header>
 
-        <main className="mx-auto max-w-[1380px] px-5 pb-12 sm:px-8 lg:px-12">
+        <main className="mx-auto max-w-[1380px] px-5 pb-28 sm:px-8 lg:px-12 lg:pb-12">
           <section className="premium-hero page-enter relative overflow-hidden rounded-[1.5rem] bg-[#263b31] px-5 py-9 text-[#f9f3e7] shadow-[0_20px_60px_rgba(38,59,49,0.16)] sm:px-10 sm:py-12 lg:px-14 lg:py-14">
             <div className="absolute -right-16 -top-24 size-72 rounded-full border border-[#d6ae60]/25" /><div className="absolute -right-2 -top-10 size-52 rounded-full border border-[#d6ae60]/20" />
             <div className="relative max-w-3xl">
