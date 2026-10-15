@@ -1,4 +1,4 @@
-import { normalizeSlots, type EventSlots, type SlotId } from '@/lib/booking';
+import { normalizeEventSlots, type EventSlots, type TimeRange } from '@/lib/booking';
 import {
   useMutation,
   useQuery,
@@ -144,7 +144,7 @@ function fromQuoteRow(row: QuoteRow): Quote {
       eventType: row.event_type,
       eventDate: row.event_date,
       eventDates: Array.isArray(row.pricing?.eventDates) && row.pricing.eventDates.length ? row.pricing.eventDates : [row.event_date],
-      eventSlots: row.pricing?.eventSlots && typeof row.pricing.eventSlots === 'object' ? row.pricing.eventSlots : {},
+      eventSlots: normalizeEventSlots(row.pricing?.eventSlots),
       guests: row.guests,
       gstNumber: row.customer_gst_number ?? '',
       hall: row.hall,
@@ -363,16 +363,16 @@ export function useDeleteQuote() {
   });
 }
 
-// Dates and slots already booked (bills ticked "Booked"), without any customer details. Needs supabase/03-availability.sql.
+// Dates and times already booked (bills ticked "Booked"), without any customer details. Needs supabase/06-booking-times.sql.
 export function useBookedSlots() {
-  return useQuery<Record<string, SlotId[]>>({
+  return useQuery<Record<string, TimeRange[]>>({
     queryKey: ['supabase', 'booked-slots'],
     queryFn: async () => {
-      const { data, error } = await requireSupabase().rpc('booked_slots');
+      const { data, error } = await requireSupabase().rpc('booked_times');
       if (error) throw error;
-      const map: Record<string, SlotId[]> = {};
-      ((data ?? []) as { booked_date: string; booked_slots: SlotId[] }[]).forEach((row) => {
-        map[row.booked_date] = Array.from(new Set([...(map[row.booked_date] ?? []), ...normalizeSlots(row.booked_slots)]));
+      const map: Record<string, TimeRange[]> = {};
+      ((data ?? []) as { booked_date: string; start_time: string; end_time: string }[]).forEach((row) => {
+        map[row.booked_date] = [...(map[row.booked_date] ?? []), { start: row.start_time, end: row.end_time }];
       });
       return map;
     },

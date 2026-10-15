@@ -36,7 +36,7 @@ export function qrPngBlob(value: string, caption: { title: string; amount: strin
       ctx.fillText(caption.amount, width / 2, pad + qrSize + 92);
       ctx.fillStyle = '#77736D';
       ctx.font = '400 22px "Helvetica Neue", Arial, sans-serif';
-      ctx.fillText('Scan with any UPI app', width / 2, pad + qrSize + 122);
+      ctx.fillText('Scan this QR with any UPI app to pay', width / 2, pad + qrSize + 122);
 
       canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Could not create the QR image.'))), 'image/png');
     } catch (error) {

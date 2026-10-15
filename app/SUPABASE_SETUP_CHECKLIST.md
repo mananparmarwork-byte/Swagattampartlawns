@@ -19,3 +19,7 @@
 - [ ] Test `/111` in production
 - [ ] Test `/999` sign-in and sign-out in production
 - [ ] Test quote saving, catalog editing, and quote deletion
+## Booking times (From – Till)
+
+Run `supabase/06-booking-times.sql` once in the Supabase SQL Editor. It lets the estimator see which hours are already
+booked (custom From – Till time per date, replacing the old Morning / Evening slots). Older bills are converted automatically.

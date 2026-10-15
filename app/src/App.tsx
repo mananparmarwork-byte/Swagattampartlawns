@@ -41,7 +41,7 @@ import type { Quote } from '@/lib/supabase-queries';
 import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
-import { ALL_SLOT_IDS, SLOTS, hasAnySlots, scheduleLines, slotText, sortSlots, type EventSlots, type SlotId } from '@/lib/booking';
+import { durationText, formatTime, hasAnySlots, isFullDayBooked, isRangeComplete, isRangeValid, normalizeEventSlots, normalizeRange, occupancyEntries, rangesOverlap, rangesText, scheduleLines, timeText, type EventSlots, type TimeRange } from '@/lib/booking';
 
 const EVENT_TYPES = ['Wedding', 'Reception', 'Engagement', 'Birthday', 'Anniversary', 'Corporate', 'Other'];
 const BANQUET_NAME = 'Swagattam Party Lawns';
@@ -274,7 +274,7 @@ function EventDetails({
   gstNumberVisible: boolean;
   customerGstNumberVisible: boolean;
   eventSlots: EventSlots;
-  bookedSlots: Record<string, SlotId[]>;
+  bookedSlots: Record<string, TimeRange[]>;
   onEventSlotsChange: (slots: EventSlots) => void;
   onChange: (field: keyof Details, value: string) => void;
   onHallGstNumberChange: (value: string) => void;
@@ -473,7 +473,7 @@ function DiscountBlock({
   );
 }
 
-function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange }: { value: string; error?: string; slots: EventSlots; booked: Record<string, SlotId[]>; onChange: (value: string) => void; onSlotsChange: (slots: EventSlots) => void }) {
+function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange }: { value: string; error?: string; slots: EventSlots; booked: Record<string, TimeRange[]>; onChange: (value: string) => void; onSlotsChange: (slots: EventSlots) => void }) {
   const dates = parseEventDates(value);
   const todayISO = localISODate(new Date());
   const [open, setOpen] = useState(false);
@@ -496,18 +496,13 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
     onSlotsChange(kept);
   };
   const toggleDate = (iso: string) => updateDates(dates.includes(iso) ? dates.filter((date) => date !== iso) : [...dates, iso]);
-  const toggleSlot = (date: string, id: SlotId) => {
-    if ((booked[date] ?? []).includes(id)) return;
-    const current = slots[date] ?? [];
-    onSlotsChange({ ...slots, [date]: sortSlots(current.includes(id) ? current.filter((slot) => slot !== id) : [...current, id]) });
-  };
-  const toggleEntireDay = (date: string) => {
-    onSlotsChange({ ...slots, [date]: (slots[date] ?? []).length === ALL_SLOT_IDS.length ? [] : [...ALL_SLOT_IDS] });
+  const setTime = (date: string, part: 'start' | 'end', time: string) => {
+    onSlotsChange({ ...slots, [date]: { ...normalizeRange(slots[date]), [part]: time } });
   };
   const copyFirstToAll = () => {
-    const first = slots[dates[0]] ?? [];
+    const first = normalizeRange(slots[dates[0]]);
     const next: EventSlots = {};
-    dates.forEach((date) => { next[date] = first.filter((slot) => !(booked[date] ?? []).includes(slot)); });
+    dates.forEach((date) => { next[date] = { ...first }; });
     onSlotsChange(next);
   };
   return (
@@ -542,14 +537,14 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
               const selected = dates.includes(iso);
               const past = iso < todayISO;
               const takenSlots = booked[iso] ?? [];
-              const full = takenSlots.length >= ALL_SLOT_IDS.length;
+              const full = isFullDayBooked(takenSlots);
               const partial = takenSlots.length > 0 && !full;
               return (
                 <button
                   key={iso}
                   type="button"
                   disabled={past || (full && !selected)}
-                  title={full ? 'Fully booked' : partial ? `Already booked: ${slotText(takenSlots, false)}` : undefined}
+                  title={full ? 'Fully booked' : partial ? `Already booked: ${rangesText(takenSlots)}` : undefined}
                   onClick={() => toggleDate(iso)}
                   aria-pressed={selected}
                   className={`relative h-9 rounded-lg text-sm font-semibold transition ${selected ? 'bg-[#864936] text-white' : past ? 'cursor-not-allowed text-[#c9c5bb]' : full ? 'cursor-not-allowed bg-[#f6dcd6] text-[#b0675a] line-through' : 'text-[#263b31] hover:bg-[#f6efe4]'} ${iso === todayISO && !selected ? 'ring-1 ring-[#b89555]' : ''}`}
@@ -561,7 +556,7 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
               );
             })}
           </div>
-          <p className="mt-2 text-[11px] text-[#8b887f]" data-testid="text-availability-legend">Red = fully booked · dot = some time slots already booked</p>
+          <p className="mt-2 text-[11px] text-[#8b887f]" data-testid="text-availability-legend">Red = fully booked · dot = part of the day already booked</p>
           <div className="mt-3 flex items-center justify-between text-xs font-semibold">
             <button type="button" onClick={() => updateDates([])} className="text-[#864936] hover:underline" data-testid="button-clear-dates">Clear all</button>
             <button type="button" onClick={() => setOpen(false)} className="rounded-lg bg-[#864936] px-4 py-1.5 text-white" data-testid="button-done-dates">Done</button>
@@ -571,40 +566,37 @@ function MultiDatePicker({ value, error, slots, booked, onChange, onSlotsChange 
       {dates.length > 0 && (
         <div className="mt-3 space-y-3" data-testid="selected-dates">
           {dates.map((date) => {
-            const chosen = slots[date] ?? [];
+            const chosen = normalizeRange(slots[date]);
             const taken = booked[date] ?? [];
-            const entire = chosen.length === ALL_SLOT_IDS.length;
-            const clash = chosen.filter((slot) => taken.includes(slot));
+            const complete = isRangeComplete(chosen);
+            const valid = isRangeValid(chosen);
+            const clash = valid ? taken.filter((range) => rangesOverlap(chosen, range)) : [];
             return (
               <div key={date} className="rounded-xl border border-[#e0d3c1] bg-[#fbf7ef] p-3" data-testid={`date-card-${date}`}>
                 <div className="flex items-center justify-between gap-2">
                   <strong className="text-sm text-[#263b31]">{displayDate(date)}</strong>
                   <button type="button" onClick={() => toggleDate(date)} aria-label={`Remove ${displayDate(date)}`} className="grid size-6 place-items-center rounded-full bg-[#864936] text-sm font-bold leading-none text-white" data-testid={`button-remove-date-${date}`}>×</button>
                 </div>
-                <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#8b887f]">Time slot</p>
-                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  <button type="button" disabled={taken.length > 0} onClick={() => toggleEntireDay(date)} aria-pressed={entire} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${taken.length > 0 ? 'cursor-not-allowed border-[#eadfd2] bg-[#f1ece4] text-[#aaa397]' : entire ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-entire`}>
-                    Entire day
-                    <span className="mt-0.5 block text-[10px] font-medium opacity-80">{taken.length > 0 ? 'Not available' : `All ${ALL_SLOT_IDS.length} slots`}</span>
-                  </button>
-                  {SLOTS.map((slot) => {
-                    const on = chosen.includes(slot.id);
-                    const occupied = taken.includes(slot.id);
-                    return (
-                      <button key={slot.id} type="button" disabled={occupied} onClick={() => toggleSlot(date, slot.id)} aria-pressed={on} className={`rounded-lg border px-2 py-2 text-left text-xs font-bold transition ${occupied ? 'cursor-not-allowed border-[#e8c3bb] bg-[#f6dcd6] text-[#b0675a]' : on ? 'border-[#864936] bg-[#864936] text-white' : 'border-[#e0d3c1] bg-white text-[#263b31] hover:border-[#864936]'}`} data-testid={`button-slot-${date}-${slot.id}`} data-occupied={occupied ? 'true' : 'false'}>
-                        <span className={occupied ? 'line-through' : ''}>{slot.label}</span>
-                        <span className="mt-0.5 block text-[10px] font-medium opacity-80">{occupied ? 'Occupied' : `${slot.start} – ${slot.end}`}</span>
-                      </button>
-                    );
-                  })}
+                <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#8b887f]">Party plot booking time</p>
+                <div className="mt-1.5 grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="mb-1 block text-[11px] font-bold text-[#5f655e]">From</span>
+                    <input type="time" value={chosen.start} onChange={(e) => setTime(date, 'start', e.target.value)} className={`field-control h-11 w-full rounded-xl px-3 text-sm font-semibold ${clash.length ? 'border-[#d9958a]' : ''}`} aria-label={`Booking start time on ${displayDate(date)}`} data-testid={`input-time-start-${date}`} />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-[11px] font-bold text-[#5f655e]">Till</span>
+                    <input type="time" value={chosen.end} onChange={(e) => setTime(date, 'end', e.target.value)} className={`field-control h-11 w-full rounded-xl px-3 text-sm font-semibold ${clash.length ? 'border-[#d9958a]' : ''}`} aria-label={`Booking end time on ${displayDate(date)}`} data-testid={`input-time-end-${date}`} />
+                  </label>
                 </div>
-                <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>{chosen.length ? slotText(chosen) : 'Pick one or more slots, e.g. Morning + Evening.'}</p>
-                {taken.length > 0 && <p className="mt-1 text-xs font-semibold text-[#b0675a]" data-testid={`text-occupied-${date}`}>Already booked on this date: {slotText(taken, false)}</p>}
-                {clash.length > 0 && <p className="mt-1 text-xs font-bold text-[#a13d32]">{slotText(clash, false)} is no longer free. Please change the time.</p>}
+                <p className="mt-2 text-xs font-semibold text-[#5f655e]" data-testid={`text-slot-summary-${date}`}>
+                  {valid ? `${timeText(chosen)} · ${durationText(chosen)}` : complete ? 'The end time must be after the start time.' : 'Tap the clock and choose when the booking starts and when it ends.'}
+                </p>
+                {taken.length > 0 && <p className="mt-1 text-xs font-semibold text-[#b0675a]" data-testid={`text-occupied-${date}`}>Already booked on this date: {rangesText(taken)}</p>}
+                {clash.length > 0 && <p className="mt-1 text-xs font-bold text-[#a13d32]" data-testid={`text-clash-${date}`}>This time overlaps an existing booking ({rangesText(clash)}). Please change the time.</p>}
               </div>
             );
           })}
-          {dates.length > 1 && (slots[dates[0]] ?? []).length > 0 && (
+          {dates.length > 1 && isRangeComplete(slots[dates[0]]) && (
             <button type="button" onClick={copyFirstToAll} className="text-xs font-bold text-[#864936] hover:underline" data-testid="button-copy-slots-all">Use the first date's time for all dates</button>
           )}
         </div>
@@ -711,9 +703,9 @@ function SummaryPanel({
           <SummaryDetail label="Guests" value={details.guests ? `${numberFormat(Number(details.guests))} guests` : 'Not selected'} />
           {hasAnySlots(eventSlots) && (
             <div className="col-span-2" data-testid="summary-schedule">
-              <span className="block text-[10px] uppercase tracking-[0.12em] text-[#9fa99e]">Time slots</span>
+              <span className="block text-[10px] uppercase tracking-[0.12em] text-[#9fa99e]">Event time</span>
               <ul className="mt-1 space-y-1 text-sm font-medium text-[#f7f0e2]">
-                {scheduleLines(parseEventDates(details.eventDate), eventSlots).map((line) => <li key={line.date}><span className="text-[#d6ae60]">{formatEventDates([line.date])}</span> · {slotText(eventSlots[line.date], false)}</li>)}
+                {scheduleLines(parseEventDates(details.eventDate), eventSlots).map((line) => <li key={line.date}><span className="text-[#d6ae60]">{formatEventDates([line.date])}</span> · {timeText(eventSlots[line.date])}</li>)}
               </ul>
             </div>
           )}
@@ -826,7 +818,7 @@ function SavedEstimateCard({ estimate, onPrint }: { estimate: EstimatePayload; o
         <SavedDetail label="Mobile" value={estimate.customer.mobile} />
         <SavedDetail label="Event" value={estimate.customer.eventType} />
         <SavedDetail label={quoteEventDates(estimate.customer).length > 1 ? 'Dates' : 'Date'} value={formatEventDates(quoteEventDates(estimate.customer))} />
-        {hasAnySlots(estimate.customer.eventSlots) && <SavedDetail label="Time slots" value={scheduleLines(quoteEventDates(estimate.customer), estimate.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${slotText(estimate.customer.eventSlots?.[line.date], false)}`).join(' · ')} />}
+        {hasAnySlots(estimate.customer.eventSlots) && <SavedDetail label="Event time" value={scheduleLines(quoteEventDates(estimate.customer), estimate.customer.eventSlots).map((line) => `${formatEventDates([line.date])}: ${timeText(estimate.customer.eventSlots?.[line.date])}`).join(' · ')} />}
         <SavedDetail label="Guests" value={numberFormat(estimate.customer.guests)} />
         {estimate.customer.gstNumber && <SavedDetail label="Customer GST" value={estimate.customer.gstNumber} />}
       </div>
@@ -973,10 +965,12 @@ function EstimatorPage() {
   const bookedSlots = useMemo(() => {
     const raw = bookedSlotsQuery.data ?? {};
     if (!editQuote || editQuote.status !== 'confirmed') return raw;
-    const next: Record<string, SlotId[]> = { ...raw };
-    Object.entries(editQuote.customer.eventSlots ?? {}).forEach(([date, list]) => {
-      const mine = sortSlots(list);
-      next[date] = (next[date] ?? []).filter((slot) => !mine.includes(slot));
+    const next: Record<string, TimeRange[]> = { ...raw };
+    occupancyEntries(quoteEventDates(editQuote.customer), editQuote.customer.eventSlots).forEach(({ date, range }) => {
+      const list = [...(next[date] ?? [])];
+      const index = list.findIndex((item) => item.start === range.start && item.end === range.end);
+      if (index >= 0) list.splice(index, 1);
+      next[date] = list;
     });
     return next;
   }, [bookedSlotsQuery.data, editQuote]);
@@ -1034,7 +1028,7 @@ function EstimatorPage() {
         if (typeof draft.hallGstNumber === 'string') setHallGstNumber(draft.hallGstNumber.slice(0, 15));
         if (typeof draft.gstNumberVisible === 'boolean') setGstNumberVisible(draft.gstNumberVisible);
          if (typeof draft.customerGstNumberVisible === 'boolean') setCustomerGstNumberVisible(draft.customerGstNumberVisible);
-        if (draft.eventSlots && typeof draft.eventSlots === 'object') setEventSlots(Object.fromEntries(Object.entries(draft.eventSlots).map(([date, list]) => [date, sortSlots(list as string[])])));
+        if (draft.eventSlots && typeof draft.eventSlots === 'object') setEventSlots(normalizeEventSlots(draft.eventSlots));
         if (typeof draft.showCostPerGuest === 'boolean') setShowCostPerGuest(draft.showCostPerGuest);
         if (typeof draft.discountEnabled === 'boolean') setDiscountEnabled(draft.discountEnabled);
         if (typeof draft.discountPercent === 'string') setDiscountPercent(draft.discountPercent);
@@ -1074,7 +1068,7 @@ function EstimatorPage() {
     setHallGstNumber((quote.pricing.gstNumber ?? '').slice(0, 15));
     setGstNumberVisible(quote.pricing.gstNumberVisible);
     setShowCostPerGuest(quote.pricing.showCostPerGuest !== false);
-    setEventSlots(Object.fromEntries(Object.entries(quote.customer.eventSlots ?? {}).map(([date, list]) => [date, sortSlots(list)])));
+    setEventSlots(normalizeEventSlots(quote.customer.eventSlots));
     const hadDiscount = Boolean(quote.pricing.discountEnabled) && (quote.pricing.discountAmount ?? 0) > 0;
     setDiscountEnabled(hadDiscount);
     setDiscountPercent(hadDiscount && quote.pricing.discountPercent ? String(quote.pricing.discountPercent) : '');
@@ -1111,7 +1105,7 @@ function EstimatorPage() {
   const discountFlatValue = discountEnabled ? Math.max(0, Number(discountFlat) || 0) : 0;
   const discountAmount = Math.min(subtotal, Math.round(subtotal * (discountPercentValue / 100)) + discountFlatValue);
   const discountLabel = discountLabelText(discountPercentValue, discountFlatValue);
-  const eventSlotsForDates: EventSlots = Object.fromEntries(parseEventDates(details.eventDate).map((date) => [date, sortSlots(eventSlots[date])]));
+  const eventSlotsForDates: EventSlots = Object.fromEntries(parseEventDates(details.eventDate).map((date) => [date, normalizeRange(eventSlots[date])]));
   const taxableAmount = subtotal - discountAmount;
   const gstAmount = gstEnabled ? taxableAmount * (gstRate / 100) : 0;
   const grandTotal = taxableAmount + gstAmount;
@@ -1148,11 +1142,13 @@ function EstimatorPage() {
     if (!chosenDates.length) nextErrors.eventDate = 'Choose at least one event date.';
     else if (chosenDates.some((date) => date < localISODate(new Date()) && !(editQuote ? quoteEventDates(editQuote.customer) : []).includes(date))) nextErrors.eventDate = 'Choose future dates only.';
     else {
-      const missingSlot = chosenDates.find((date) => !eventSlotsForDates[date]?.length);
-      if (missingSlot) nextErrors.eventDate = `Choose a time slot for ${formatEventDates([missingSlot])}.`;
+      const missingTime = chosenDates.find((date) => !isRangeComplete(eventSlotsForDates[date]));
+      const badTime = chosenDates.find((date) => isRangeComplete(eventSlotsForDates[date]) && !isRangeValid(eventSlotsForDates[date]));
+      if (missingTime) nextErrors.eventDate = `Enter the start time and end time for ${formatEventDates([missingTime])}.`;
+      else if (badTime) nextErrors.eventDate = `The end time must be after the start time on ${formatEventDates([badTime])}.`;
       else {
-        const clashDate = chosenDates.find((date) => eventSlotsForDates[date].some((slot) => (bookedSlots[date] ?? []).includes(slot)));
-        if (clashDate) nextErrors.eventDate = `${formatEventDates([clashDate])} is already booked for ${slotText(eventSlotsForDates[clashDate].filter((slot) => (bookedSlots[clashDate] ?? []).includes(slot)), false)}. Please choose another time.`;
+        const clashDate = chosenDates.find((date) => (bookedSlots[date] ?? []).some((taken) => rangesOverlap(eventSlotsForDates[date] as TimeRange, taken)));
+        if (clashDate) nextErrors.eventDate = `${formatEventDates([clashDate])} is already booked for ${rangesText((bookedSlots[clashDate] ?? []).filter((taken) => rangesOverlap(eventSlotsForDates[clashDate] as TimeRange, taken)))}. Please choose another time.`;
       }
     }
     if (!Number.isInteger(guestCount) || guestCount <= 0) nextErrors.guests = 'Guests must be more than zero.';

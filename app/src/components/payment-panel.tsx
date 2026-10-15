@@ -110,18 +110,19 @@ export function PaymentPanel({ quote }: { quote: Quote }) {
   };
 
   const eventName = quote.customer.eventType?.trim();
+  // The WhatsApp message no longer carries a UPI ID or pay link: the auto-generated QR code (with the amount already filled in)
+  // is sent together with this message, and the customer is asked to pay by scanning it.
   const requestText = [
-    `Hello ${quote.customer.name}, this is ${settings.payeeName}. Please pay ${money(applied)} (${kind === 'full' || applied >= balance ? 'full payment' : 'advance payment'}) for your ${eventName ? `${eventName} ` : ''}booking.`,
+    `Hello ${quote.customer.name}, this is ${settings.payeeName}.`,
     '',
-    `UPI ID: ${settings.upiId}`,
-    `Payee: ${settings.payeeName}`,
-    `Amount: ${money(applied)}`,
+    `Please pay ${money(applied)} (${kind === 'full' || applied >= balance ? 'full payment' : 'advance payment'}) for your ${eventName ? `${eventName} ` : ''}booking.`,
+    '',
+    `Please scan the QR code sent with this message and pay with it. The amount ${money(applied)} is already filled in.`,
+    '',
     ...(received > 0 ? [`Already paid: ${money(received)}`] : []),
     `Balance after this payment: ${money(Math.max(0, balance - applied))}`,
     '',
-    `Pay link: ${upiUri}`,
-    '',
-    'You can pay from Google Pay, PhonePe, Paytm or any UPI app. Please share the screenshot after paying. Thank you!',
+    'You can scan it from Google Pay, PhonePe, Paytm or any UPI app. Please share the screenshot after paying. Thank you!',
   ].join('\n');
 
   // Prepare the QR picture ahead of time so the WhatsApp button can use it instantly.
