@@ -32,13 +32,17 @@ import {
   RotateCcw,
   Send,
   Sparkles,
+  Trash2,
   UsersRound,
+  BookmarkPlus,
 } from 'lucide-react';
 import { ErrorBoundary } from '@/components/error-boundary';
 import NotFound from '@/pages/not-found';
 import type { EstimatePayload } from '@/lib/estimate-connection';
 import type { Quote } from '@/lib/supabase-queries';
 import { CATALOG_UPDATED_EVENT, cacheCatalog, loadCatalog } from '@/lib/catalog';
+import { MOBILE_HINT, MOBILE_PLACEHOLDER, cleanMobileInput, isValidMobile, mobileError, whatsappUrl } from '@/lib/phone';
+import { loadPresets, newId, savePresets, type OtherPreset } from '@/lib/presets';
 import type { CatalogCategory as Category, CatalogItem as Item, CatalogSubcategory as Subcategory } from '@/lib/catalog';
 import AdminPage from '@/pages/admin';
 import { ClockTimePicker } from '@/components/clock-time-picker';
@@ -78,6 +82,7 @@ type PrintData = {
   advanceAmount: number;
   balanceDue: number;
 };
+type CustomItem = { id: string; name: string; price: string };
 type CopyStatus = 'idle' | 'copied' | 'error';
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -135,15 +140,19 @@ function CategoryCard({
   selections,
   onToggle,
   onQuantityChange,
+  extra,
+  extraSelectedCount = 0,
 }: {
   category: Category;
   selections: Record<string, number>;
   onToggle: (item: Item, checked: boolean) => void;
   onQuantityChange: (item: Item, quantity: number) => void;
+  extra?: ReactNode;
+  extraSelectedCount?: number;
 }) {
   const [open, setOpen] = useState(category.id === 'food');
   const itemCount = category.subcategories.reduce((total, subcategory) => total + subcategory.items.length, 0);
-  const selectedCount = category.subcategories.reduce((total, subcategory) => total + subcategory.items.filter((item) => (selections[item.id] ?? 0) > 0).length, 0);
+  const selectedCount = extraSelectedCount + category.subcategories.reduce((total, subcategory) => total + subcategory.items.filter((item) => (selections[item.id] ?? 0) > 0).length, 0);
   return (
     <section className="overflow-hidden rounded-2xl border border-[#e5dccd] bg-[#fffdf8]">
       <button
@@ -175,6 +184,7 @@ function CategoryCard({
               onQuantityChange={onQuantityChange}
             />
           ))}
+          {extra}
         </div>
       )}
     </section>
@@ -249,6 +259,82 @@ function SubcategoryGroup({
   );
 }
 
+function OtherCustomItems({
+  items,
+  presets,
+  onAddBlank,
+  onAddPreset,
+  onChange,
+  onRemove,
+  onSavePreset,
+  onDeletePreset,
+}: {
+  items: CustomItem[];
+  presets: OtherPreset[];
+  onAddBlank: () => void;
+  onAddPreset: (preset: OtherPreset) => void;
+  onChange: (id: string, patch: Partial<CustomItem>) => void;
+  onRemove: (id: string) => void;
+  onSavePreset: (item: CustomItem) => void;
+  onDeletePreset: (id: string) => void;
+}) {
+  const presetExists = (name: string) => presets.some((preset) => preset.name.trim().toLowerCase() === name.trim().toLowerCase());
+  return (
+    <div className="mt-3 rounded-xl border border-dashed border-[#d8cbbb] bg-[#fbf7ee] p-3 sm:p-4" data-testid="panel-custom-items">
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#6c6a63]">Custom items &amp; presets</p>
+      <p className="mt-1 text-xs leading-relaxed text-[#77756e]">Add anything that is not in the list: write the item name and the amount yourself. Tap the bookmark to save it as a preset for next time.</p>
+
+      <div className="mt-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#9a5b47]">Saved presets</p>
+        {presets.length === 0 ? (
+          <p className="rounded-lg bg-[#fffdf8] px-3 py-2 text-xs text-[#8a867c]" data-testid="text-no-presets">No presets yet. Add an item below and tap the bookmark to save it, e.g. “Light bill”.</p>
+        ) : (
+          <ul className="space-y-2">
+            {presets.map((preset) => (
+              <li key={preset.id} className="flex items-center gap-2 rounded-lg border border-[#eee6d9] bg-[#fffdf8] px-3 py-2" data-testid={`preset-${preset.id}`}>
+                <button type="button" onClick={() => onAddPreset(preset)} className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left" data-testid={`button-add-preset-${preset.id}`} aria-label={`Add ${preset.name} to this bill`}>
+                  <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-[#263b31]"><Plus size={15} className="shrink-0 text-[#864936]" /><span className="truncate">{preset.name}</span></span>
+                  <span className="shrink-0 font-mono text-xs font-bold text-[#864936]">{preset.amount > 0 ? currency(preset.amount) : 'Enter amount'}</span>
+                </button>
+                <button type="button" onClick={() => onDeletePreset(preset.id)} className="grid size-8 shrink-0 place-items-center rounded-lg text-[#8a3d32] transition hover:bg-[#fbe4dc]" aria-label={`Delete preset ${preset.name}`} title="Delete preset" data-testid={`button-delete-preset-${preset.id}`}><Trash2 size={15} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-4">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#9a5b47]">Added to this bill</p>
+        {items.length === 0 ? (
+          <p className="rounded-lg bg-[#fffdf8] px-3 py-2 text-xs text-[#8a867c]">Nothing added yet. Tap a preset above, or add a new item.</p>
+        ) : (
+          <ul className="space-y-2">
+            {items.map((item) => {
+              const canSave = item.name.trim().length > 0;
+              const exists = presetExists(item.name);
+              return (
+                <li key={item.id} className="item-row is-selected flex flex-wrap items-center gap-2 rounded-xl border px-3 py-3" data-testid={`custom-item-${item.id}`}>
+                  <input value={item.name} onChange={(e) => onChange(item.id, { name: e.target.value.slice(0, 80) })} placeholder="Item name, e.g. Light bill" aria-label="Item name" className="field-control h-11 min-w-[150px] flex-1 rounded-lg px-3 text-sm" data-testid={`input-custom-name-${item.id}`} />
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#77756e]">₹</span>
+                      <input value={item.price} onChange={(e) => onChange(item.id, { price: e.target.value.replace(/[^\d.]/g, '').slice(0, 10) })} inputMode="decimal" placeholder="Amount" aria-label="Amount" className="field-control h-11 w-28 rounded-lg pl-7 pr-2 text-right font-mono text-sm" data-testid={`input-custom-amount-${item.id}`} />
+                    </div>
+                    <button type="button" disabled={!canSave} onClick={() => onSavePreset(item)} className="grid size-11 shrink-0 place-items-center rounded-lg border border-[#dccfbd] bg-[#fffdf8] text-[#864936] transition hover:bg-[#f2e8d3] disabled:cursor-not-allowed disabled:opacity-40" aria-label={exists ? 'Update preset' : 'Save as preset'} title={exists ? 'Update saved preset with this amount' : 'Save as preset'} data-testid={`button-save-preset-${item.id}`}><BookmarkPlus size={17} /></button>
+                    <button type="button" onClick={() => onRemove(item.id)} className="grid size-11 shrink-0 place-items-center rounded-lg border border-[#e8cfc5] bg-[#fffdf8] text-[#8a3d32] transition hover:bg-[#fbe4dc]" aria-label="Remove item" title="Remove" data-testid={`button-remove-custom-${item.id}`}><Trash2 size={17} /></button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <button type="button" onClick={onAddBlank} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#c9b89f] bg-[#fffdf8] px-4 text-sm font-bold text-[#864936] transition hover:bg-[#f2e8d3]" data-testid="button-add-custom-item"><Plus size={16} /> Add new item (write name &amp; amount)</button>
+        <p className="mt-2 text-[11px] text-[#8a867c]">Items without an amount are left out of the bill. An item with an amount but no name is billed as “Other charge”.</p>
+      </div>
+    </div>
+  );
+}
+
 function EventDetails({
   details,
   errors,
@@ -296,8 +382,8 @@ function EventDetails({
         <Field label="Customer name" required error={errors.name}>
           <input value={details.name} onChange={(e) => onChange('name', e.target.value)} placeholder="e.g. Kavya Mehta" className="field-control h-12 w-full rounded-xl px-3 text-sm" data-testid="input-customer-name" />
         </Field>
-        <Field label="Mobile number" required error={errors.mobile} hint="10 digit mobile number">
-          <input value={details.mobile} onChange={(e) => onChange('mobile', e.target.value.replace(/[^\d+ ]/g, '').slice(0, 14))} inputMode="tel" placeholder="e.g. 98765 43210" className="field-control h-12 w-full rounded-xl px-3 text-sm" data-testid="input-mobile-number" />
+        <Field label="Mobile number" required error={errors.mobile} hint={MOBILE_HINT}>
+          <input value={details.mobile} onChange={(e) => onChange('mobile', cleanMobileInput(e.target.value))} inputMode="tel" autoComplete="tel" placeholder={MOBILE_PLACEHOLDER} className="field-control h-12 w-full rounded-xl px-3 text-sm" data-testid="input-mobile-number" />
         </Field>
         <Field label="Event type" required error={errors.eventType}>
           <select value={details.eventType} onChange={(e) => onChange('eventType', e.target.value)} className="field-control h-12 w-full rounded-xl px-3 text-sm" data-testid="select-event-type">
@@ -926,6 +1012,8 @@ function EstimatorPage() {
   const isEditing = Boolean(editReference);
   const [editQuote, setEditQuote] = useState<Quote | null>(null);
   const [priceOverrides, setPriceOverrides] = useState<Record<string, number>>({});
+  const [customItems, setCustomItems] = useState<CustomItem[]>([]);
+  const [presets, setPresets] = useState<OtherPreset[]>(() => loadPresets());
   const [saveError, setSaveError] = useState('');
   const editQuery = useGetQuote(editReference, { query: { enabled: isEditing, queryKey: getGetQuoteQueryKey(editReference) } });
   const updateQuoteMutation = useUpdateQuote();
@@ -988,7 +1076,9 @@ function EstimatorPage() {
           discountFlat?: string;
           advancePaid?: boolean;
           advanceAmount?: string;
+          customItems?: CustomItem[];
         };
+        if (Array.isArray(draft.customItems)) setCustomItems(draft.customItems.filter((item) => item && typeof item.id === 'string').map((item) => ({ id: item.id, name: String(item.name ?? ''), price: String(item.price ?? '') })));
         if (draft.details) setDetails((current) => ({ ...current, ...draft.details }));
         if (draft.selections && typeof draft.selections === 'object') setSelections(draft.selections);
         if (typeof draft.gstEnabled === 'boolean') setGstEnabled(draft.gstEnabled);
@@ -1015,11 +1105,15 @@ function EstimatorPage() {
     // A saved bill that is being edited must never overwrite the normal draft kept on this device.
     if (!isHydrated || isEditing) return;
     try {
-       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, advancePaid, advanceAmount }));
+       window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, advancePaid, advanceAmount, customItems }));
     } catch {
       // The estimator remains usable when browser storage is unavailable.
     }
-  }, [details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, advancePaid, advanceAmount, isEditing, isHydrated]);
+  }, [details, selections, gstEnabled, gstRate, hallGstNumber, gstNumberVisible, customerGstNumberVisible, eventSlots, showCostPerGuest, discountEnabled, discountPercent, discountFlat, advancePaid, advanceAmount, customItems, isEditing, isHydrated]);
+
+  useEffect(() => {
+    if (isHydrated) savePresets(presets);
+  }, [presets, isHydrated]);
 
   const guestCount = Number(details.guests) || 0;
   useEffect(() => {
@@ -1031,6 +1125,7 @@ function EstimatorPage() {
     setDetails({ name: quote.customer.name, mobile: quote.customer.mobile, eventType: knownType ? savedType : 'Other', otherEventType: knownType || savedType === 'Other' ? '' : savedType, eventDate: quoteEventDates(quote.customer).join(','), guests: String(quote.customer.guests), billNumber: quote.reference, customerGstNumber: quote.customer.gstNumber ?? '' });
     setSelections(Object.fromEntries(quote.services.map((service) => [service.id, service.pricingType === 'perUnit' ? service.quantity : 1])));
     setPriceOverrides(Object.fromEntries(quote.services.map((service) => [service.id, service.unitPrice])));
+    setCustomItems(quote.services.filter((service) => service.id.startsWith('custom-')).map((service) => ({ id: service.id, name: service.name, price: String(service.unitPrice) })));
     setGstEnabled(quote.pricing.gstEnabled);
     setGstRate(Math.min(28, Math.max(0, Number(quote.pricing.gstRate) || 0)));
     setHallGstNumber((quote.pricing.gstNumber ?? '').slice(0, 15));
@@ -1046,7 +1141,16 @@ function EstimatorPage() {
     setAdvanceAmount(savedAdvance.paid ? String(savedAdvance.amount) : '');
   }, [editQuery.data, editQuote]);
 
-  const lines = useMemo<Line[]>(() => catalog.flatMap((category) => category.subcategories.flatMap((subcategory) => subcategory.items.filter((item) => item.active))).flatMap((item) => {
+  const customLines = useMemo<Line[]>(() => {
+    const otherName = catalog.find((entry) => entry.id === 'other')?.name ?? 'Other Services';
+    return customItems.flatMap((item) => {
+      const price = Math.max(0, Number(item.price) || 0);
+      if (price <= 0) return [];
+      return [{ id: item.id, name: item.name.trim() || 'Other charge', description: '', categoryId: 'other', subcategoryId: 'custom-items', price, pricingType: 'fixed' as const, active: true, minQuantity: 1, maxQuantity: 1, categoryName: otherName, subcategoryName: 'Custom items', quantity: 1, total: price }];
+    });
+  }, [catalog, customItems]);
+
+  const catalogLines = useMemo<Line[]>(() => catalog.flatMap((category) => category.subcategories.flatMap((subcategory) => subcategory.items.filter((item) => item.active))).flatMap((item) => {
     const rawQuantity = selections[item.id] ?? 0;
     const quantity = rawQuantity && item.pricingType === 'perUnit'
       ? Math.min(item.maxQuantity, Math.max(item.minQuantity, rawQuantity))
@@ -1059,6 +1163,7 @@ function EstimatorPage() {
     const total = item.pricingType === 'perPerson' ? price * guestCount : price * quantity;
     return [{ ...item, price, categoryName: category?.name ?? '', subcategoryName: subcategory?.name ?? '', quantity, total }];
   }), [catalog, guestCount, selections, priceOverrides]);
+  const lines = useMemo<Line[]>(() => [...catalogLines, ...customLines], [catalogLines, customLines]);
 
   const missingServices = useMemo(() => (editQuote ? editQuote.services.filter((service) => !lines.some((line) => line.id === service.id)) : []), [editQuote, lines]);
 
@@ -1099,11 +1204,25 @@ function EstimatorPage() {
     setSelections((current) => ({ ...current, [item.id]: quantity }));
   };
 
+  const addCustomItem = (name = '', amount = 0) => setCustomItems((current) => [...current, { id: newId('custom'), name, price: amount > 0 ? String(amount) : '' }]);
+  const changeCustomItem = (id: string, patch: Partial<CustomItem>) => setCustomItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  const removeCustomItem = (id: string) => setCustomItems((current) => current.filter((item) => item.id !== id));
+  const savePreset = (item: CustomItem) => {
+    const name = item.name.trim();
+    if (!name) return;
+    const amount = Math.max(0, Number(item.price) || 0);
+    setPresets((current) => {
+      const index = current.findIndex((preset) => preset.name.trim().toLowerCase() === name.toLowerCase());
+      if (index >= 0) return current.map((preset, i) => (i === index ? { ...preset, name, amount } : preset));
+      return [...current, { id: newId('preset'), name, amount }];
+    });
+  };
+  const deletePreset = (id: string) => setPresets((current) => current.filter((preset) => preset.id !== id));
+
   const validate = () => {
     const nextErrors: ValidationErrors = {};
     if (!details.name.trim()) nextErrors.name = 'Please enter the customer name.';
-    const mobileDigits = details.mobile.replace(/\D/g, '');
-    if (!/^[6-9]\d{9}$/.test(mobileDigits.slice(-10))) nextErrors.mobile = 'Enter a valid 10 digit mobile number.';
+    if (!isValidMobile(details.mobile)) nextErrors.mobile = mobileError(details.mobile);
     if (!details.eventType) nextErrors.eventType = 'Choose an event type.';
     if (details.eventType === 'Other' && !details.otherEventType.trim()) nextErrors.otherEventType = 'Describe the occasion you are planning.';
     const chosenDates = parseEventDates(details.eventDate);
@@ -1243,14 +1362,9 @@ function EstimatorPage() {
     }
   };
   const sendWhatsApp = () => {
-    const digits = details.mobile.replace(/\D/g, '');
-    const validMobile = /^[6-9]\d{9}$/.test(digits.slice(-10));
-    const target = validMobile ? `91${digits.slice(-10)}` : '';
-    const whatsappUrl = target
-      ? `https://wa.me/${target}?text=${encodeURIComponent(estimateMessage())}`
-      : `https://wa.me/?text=${encodeURIComponent(estimateMessage())}`;
-    const popup = window.open(whatsappUrl, '_blank');
-    if (!popup) window.location.assign(whatsappUrl);
+    const link = whatsappUrl(details.mobile, estimateMessage());
+    const popup = window.open(link, '_blank');
+    if (!popup) window.location.assign(link);
   };
   const saveEstimate = () => {
     if (isEditing && !editQuote) return;
@@ -1279,6 +1393,7 @@ function EstimatorPage() {
     if (window.confirm('Reset this estimate? All event details and selections will be cleared.')) {
       setDetails(INITIAL_DETAILS);
       setSelections({});
+      setCustomItems([]);
       setGstEnabled(true);
       setGstRate(5);
       setHallGstNumber('');
@@ -1352,7 +1467,7 @@ function EstimatorPage() {
                 </div>
                  {catalogQuery.isLoading && <div className="mb-3 rounded-xl border border-[#e3d8c9] bg-[#fffdf8] px-4 py-3 text-xs text-[#7b776e]" role="status" data-testid="status-catalog-loading">Refreshing the service catalog…</div>}
                  {catalogQuery.isError && <div className="mb-3 rounded-xl border border-[#e8cfc5] bg-[#fff7f3] px-4 py-3 text-xs text-[#8a5144]" role="alert" data-testid="status-catalog-fallback">The live catalog is temporarily unavailable. Showing the latest catalog saved on this device.</div>}
-                 {catalog.length === 0 ? <div className="rounded-2xl border border-dashed border-[#d8cbbb] bg-[#fffdf8] p-8 text-center text-sm text-[#77756e]">Services are being refreshed. Please check back shortly.</div> : <div className="space-y-3">{catalog.map((category) => <CategoryCard key={category.id} category={category} selections={selections} onToggle={onToggle} onQuantityChange={onQuantityChange} />)}</div>}
+                 {catalog.length === 0 ? <div className="rounded-2xl border border-dashed border-[#d8cbbb] bg-[#fffdf8] p-8 text-center text-sm text-[#77756e]">Services are being refreshed. Please check back shortly.</div> : <div className="space-y-3">{catalog.map((category) => <CategoryCard key={category.id} category={category} selections={selections} onToggle={onToggle} onQuantityChange={onQuantityChange} extraSelectedCount={category.id === 'other' ? customLines.length : 0} extra={category.id === 'other' ? <OtherCustomItems items={customItems} presets={presets} onAddBlank={() => addCustomItem()} onAddPreset={(preset) => addCustomItem(preset.name, preset.amount)} onChange={changeCustomItem} onRemove={removeCustomItem} onSavePreset={savePreset} onDeletePreset={deletePreset} /> : undefined} />)}</div>}
               </section>
             </div>
              <SummaryPanel catalog={catalog} details={details} eventSlots={eventSlotsForDates} lines={lines} categoryTotals={categoryTotals} foodPerPlate={foodPerPlate} subtotal={subtotal} gstEnabled={gstEnabled} gstRate={gstRate} gstAmount={gstAmount} discountAmount={discountAmount} discountLabel={discountLabel} grandTotal={grandTotal} advanceAmount={advanceValue} balanceDue={balanceDue} editing={isEditing} saveErrorMessage={saveError} costPerGuest={costPerGuest} showCostPerGuest={showCostPerGuest} onShowCostPerGuestChange={setShowCostPerGuest} onGstChange={setGstEnabled} onGstRateChange={setGstRate} onPrint={printEstimate} onPrintSaved={printSavedEstimate} onCopy={copyEstimate} copyStatus={copyStatus} onWhatsApp={sendWhatsApp} onSaveEstimate={saveEstimate} saveStatus={saveStatus} savedEstimate={savedEstimate} onReset={resetEstimate} />

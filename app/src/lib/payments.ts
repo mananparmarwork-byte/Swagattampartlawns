@@ -1,3 +1,4 @@
+import { whatsappUrl } from '@/lib/phone';
 // UPI payment helpers: payee settings, UPI link and WhatsApp request text.
 
 export type PaymentSettings = {
@@ -85,9 +86,7 @@ export function buildUpiUri(settings: UpiSettings, amount: number, note: string)
 }
 
 export function whatsappLink(mobile: string, text: string): string {
-  const digits = mobile.replace(/\D/g, '');
-  const valid = /^[6-9]\d{9}$/.test(digits.slice(-10));
-  return `https://wa.me/${valid ? `91${digits.slice(-10)}` : ''}?text=${encodeURIComponent(text)}`;
+  return whatsappUrl(mobile, text);
 }
 
 export function newPaymentId(): string {
